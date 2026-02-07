@@ -4,6 +4,14 @@
 
 **Try it yourself!** Text **[+1 (415) 870-7772](sms:+14158707772)** to chat with Claude Sullivan, our AI agent running on the Linq Blue API.
 
+---
+
+## 🚀 Build Your Own Agent
+
+Want to build your own AI agent with iMessage? **[Sign up for Linq's free sandbox](https://linqapp.com)** and start building in minutes. No credit card required.
+
+---
+
 A demo app showcasing the [Linq Blue v3 API](https://apidocs.linqapp.com). Connects Claude (Anthropic's AI) to iMessage, allowing users to chat with an AI assistant via text message.
 
 ## Features
