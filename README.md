@@ -221,26 +221,6 @@ docker build -t linq-blue-agent .
 docker run -p 3000:3000 --env-file .env linq-blue-agent
 ```
 
-### Platform Options
-
-**Railway:**
-```bash
-railway init && railway up
-```
-
-**Fly.io:**
-```bash
-fly launch && fly deploy
-```
-
-**Heroku:**
-```bash
-heroku create && git push heroku main
-```
-
-**AWS App Runner:**
-Push to ECR and deploy via App Runner console or CLI.
-
 ## Models Used
 
 - **Main responses**: Claude Sonnet 4 - balanced quality and speed
