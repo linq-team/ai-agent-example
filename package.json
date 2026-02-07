@@ -1,0 +1,45 @@
+{
+  "name": "linq-blue-agent-example",
+  "version": "1.0.0",
+  "description": "Example AI agent built on Linq Messaging API - showcases Claude AI integration with iMessage, web search, image generation, and more",
+  "main": "dist/index.js",
+  "author": "Linq Technologies Incorporated",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/linq-team/linq-blue-agent-example.git"
+  },
+  "keywords": [
+    "linq",
+    "linq-blue",
+    "imessage",
+    "claude",
+    "anthropic",
+    "ai",
+    "chatbot",
+    "sms",
+    "messaging",
+    "api",
+    "example",
+    "typescript"
+  ],
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "@aws-sdk/client-dynamodb": "^3.971.0",
+    "@aws-sdk/lib-dynamodb": "^3.971.0",
+    "dotenv": "^17.2.3",
+    "express": "^4.21.0",
+    "openai": "^6.16.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0"
+  }
+}
