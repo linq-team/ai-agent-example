@@ -6,7 +6,7 @@
 
 ---
 
-## 🚀 Build Your Own Agent
+## Build Your Own Agent
 
 Want to build your own AI agent with iMessage? **[Sign up for Linq's free sandbox](https://linqapp.com)** and start building in minutes. No credit card required.
 
