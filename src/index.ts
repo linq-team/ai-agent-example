@@ -139,10 +139,10 @@ app.post(
       finalText = `renamed the chat to "${renameChat}" 😎`;
     }
 
-    // If Claude used remember_user without text, just log it - no automatic acknowledgments
-    // Claude should write its own response if it wants to acknowledge learning something
-    if (!finalText && rememberedUser) {
-      console.log(`[main] Claude saved user info without text response (no auto-ack)`);
+    // If Claude used remember_user without text and no reaction, send a thumbs up to acknowledge
+    if (!finalText && rememberedUser && !reaction) {
+      console.log(`[main] Claude saved user info without text response, sending thumbs up`);
+      await sendReaction(messageId, { type: 'like' });
     }
 
     if (finalText || generatedImage || groupChatIcon) {
