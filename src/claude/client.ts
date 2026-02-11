@@ -1,5 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
+import { JSDOM } from 'jsdom';
+import { Readability } from '@mozilla/readability';
 import { getConversation, addMessage, clearConversation, getUserProfile, setUserName, addUserFact, clearUserProfile, UserProfile, StoredMessage } from '../state/conversation.js';
 
 const client = new Anthropic();
@@ -71,6 +73,8 @@ Available commands (tell users about these if they ask):
 If someone asks how to use this, what commands are available, or how to make you forget something, tell them about the relevant commands.
 
 You can search the web for current information like weather, news, sports scores, etc. Use web search when you need up-to-date information.
+
+You can also fetch and read the contents of URLs/links that people share with you. If someone sends you a link, use the fetch_url tool to read the page and tell them about it. Note: some JS-heavy pages (like Twitter/X posts) may not return content — let the user know if that happens.
 
 ## Reactions
 You can react to messages using iMessage reactions, but TEXT RESPONSES ARE PREFERRED.
@@ -284,6 +288,21 @@ const WEB_SEARCH_TOOL = {
   name: 'web_search',
 } as unknown as Anthropic.Tool;
 
+const FETCH_URL_TOOL: Anthropic.Tool = {
+  name: 'fetch_url',
+  description: 'Fetch and read the contents of a webpage URL. Use this when someone shares a link and you want to see what\'s on the page. Works well for articles, blog posts, and most websites. Note: may not work for JS-heavy pages like Twitter/X posts.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      url: {
+        type: 'string',
+        description: 'The URL to fetch',
+      },
+    },
+    required: ['url'],
+  },
+};
+
 export type StandardReactionType = 'love' | 'like' | 'dislike' | 'laugh' | 'emphasize' | 'question';
 export type ReactionType = StandardReactionType | 'custom';
 export type MessageEffect = { type: 'screen' | 'bubble'; name: string };
@@ -369,6 +388,64 @@ async function transcribeAudio(url: string): Promise<string | null> {
   } catch (error) {
     console.error(`[claude] Transcription error:`, error);
     return null;
+  }
+}
+
+// Fetch a URL and extract readable text using Readability
+const MAX_CONTENT_LENGTH = 20000; // Truncate to avoid blowing up Claude's context
+
+async function fetchUrl(url: string): Promise<string> {
+  try {
+    console.log(`[claude] Fetching URL: ${url}`);
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; LinqBot/1.0)',
+      },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(10000),
+    });
+
+    if (!response.ok) {
+      return `Failed to fetch URL: HTTP ${response.status}`;
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (!contentType.includes('text/html')) {
+      return `This URL returned ${contentType} content, not a webpage.`;
+    }
+
+    const html = await response.text();
+    const dom = new JSDOM(html, { url });
+    const reader = new Readability(dom.window.document);
+    const article = reader.parse();
+
+    if (article?.textContent?.trim()) {
+      let text = article.textContent.trim();
+      const title = article.title ? `Title: ${article.title}\n\n` : '';
+      if (text.length > MAX_CONTENT_LENGTH) {
+        text = text.substring(0, MAX_CONTENT_LENGTH) + '\n\n[Content truncated]';
+      }
+      console.log(`[claude] URL fetched successfully: "${article.title}" (${text.length} chars)`);
+      return title + text;
+    }
+
+    // Readability couldn't extract content — fall back to basic text extraction
+    const bodyText = dom.window.document.body?.textContent?.trim() || '';
+    if (bodyText) {
+      const truncated = bodyText.length > MAX_CONTENT_LENGTH
+        ? bodyText.substring(0, MAX_CONTENT_LENGTH) + '\n\n[Content truncated]'
+        : bodyText;
+      console.log(`[claude] URL fetched (fallback extraction): ${truncated.length} chars`);
+      return truncated;
+    }
+
+    return 'Could not extract readable content from this page. It may require JavaScript to render (like Twitter/X posts).';
+  } catch (error) {
+    console.error(`[claude] URL fetch error:`, error);
+    if (error instanceof DOMException && error.name === 'TimeoutError') {
+      return 'The page took too long to load (timed out after 10 seconds).';
+    }
+    return `Failed to fetch URL: ${error instanceof Error ? error.message : 'unknown error'}`;
   }
 }
 
@@ -514,20 +591,55 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
     const formattedHistory = formatHistoryForClaude(history, chatContext?.isGroupChat ?? false);
 
     // Build tools list - some tools only available in group chats
-    const tools: Anthropic.Tool[] = [REACTION_TOOL, EFFECT_TOOL, REMEMBER_USER_TOOL, GENERATE_IMAGE_TOOL, WEB_SEARCH_TOOL];
+    const tools: Anthropic.Tool[] = [REACTION_TOOL, EFFECT_TOOL, REMEMBER_USER_TOOL, GENERATE_IMAGE_TOOL, WEB_SEARCH_TOOL, FETCH_URL_TOOL];
     if (chatContext?.isGroupChat) {
       tools.push(RENAME_CHAT_TOOL, SET_GROUP_ICON_TOOL);
     }
 
-    const response = await client.messages.create({
+    // Build messages array for the API call (we may add to it during tool-use loops)
+    const apiMessages: Anthropic.MessageParam[] = [...formattedHistory, { role: 'user', content: messageContent }];
+
+    let response = await client.messages.create({
       model: 'claude-sonnet-4-20250514',
       max_tokens: 1024,
       system: buildSystemPrompt(chatContext),
       tools,
-      messages: [...formattedHistory, { role: 'user', content: messageContent }],
+      messages: apiMessages,
     });
 
-    // Extract text response and tool calls
+    // Tool-use loop: when Claude calls tools that need results (like fetch_url),
+    // execute them, send the results back, and let Claude continue.
+    while (response.stop_reason === 'tool_use') {
+      const toolResults: Anthropic.ToolResultBlockParam[] = [];
+
+      for (const block of response.content) {
+        if (block.type === 'tool_use' && block.name === 'fetch_url') {
+          const input = block.input as { url: string };
+          const content = await fetchUrl(input.url);
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content });
+        } else if (block.type === 'tool_use') {
+          // Other tools (reactions, effects, etc.) don't return meaningful results,
+          // but we still need to acknowledge them to continue the conversation.
+          toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: 'ok' });
+        }
+      }
+
+      // Add this exchange to the conversation and call Claude again
+      apiMessages.push({ role: 'assistant', content: response.content });
+      apiMessages.push({ role: 'user', content: toolResults });
+
+      console.log(`[claude] Tool-use loop: sending ${toolResults.length} tool result(s) back to Claude`);
+
+      response = await client.messages.create({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1024,
+        system: buildSystemPrompt(chatContext),
+        tools,
+        messages: apiMessages,
+      });
+    }
+
+    // Process the final response for text and tool calls
     const textParts: string[] = [];
     let reaction: Reaction | null = null;
     let effect: MessageEffect | null = null;
