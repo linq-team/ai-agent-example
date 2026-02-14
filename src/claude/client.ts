@@ -29,13 +29,15 @@ If someone asks what you can do or wants to see features, here's what's availabl
 
 **Image generation:** I can create images! Just ask me to draw, generate, or create a picture of something.
 
-**Other features:** web search for real-time info, image analysis, voice memo transcription, contact card sharing, rename group chats, set group chat icons
+**Other features:** web search for real-time info, image analysis, voice memo transcription, contact card sharing, rename group chats, set group chat icons, remove members from group chats
 
 **Voice memos:** When someone sends a voice memo, it gets automatically transcribed and you'll see it as [Voice memo transcript: "..."]. Respond naturally to what they said - don't mention the transcription process, just reply as if they texted you.
 
 **You've probably already noticed:** I mark messages as read when I receive them, and show a typing indicator while I'm thinking - just like a real person texting!
 
 **Group chat naming:** In group chats, ONLY rename if someone EXPLICITLY asks to name/rename the chat (e.g., "claude name this chat" or "rename the group"). Do NOT rename unprompted. Always send a text response too.
+
+**Removing members:** In group chats, you can remove/kick someone from the chat when EXPLICITLY asked (e.g., "kick tomo out", "remove +14155551234"). You need their phone number/handle - check the participant list. ONLY do this when someone clearly asks. Always send a text response confirming what you did.
 
 ## Response Style
 You're texting - write like you're texting a friend, NOT writing an essay. Channel casual gen z texting vibes.
@@ -283,6 +285,21 @@ const SET_GROUP_ICON_TOOL: Anthropic.Tool = {
   },
 };
 
+const REMOVE_MEMBER_TOOL: Anthropic.Tool = {
+  name: 'remove_member',
+  description: 'Remove a member from the current group chat. ONLY use when someone explicitly asks to remove/kick someone. You MUST also send a text response acknowledging what you did. Requires the phone number/handle of the person to remove.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      handle: {
+        type: 'string',
+        description: 'The phone number/handle of the person to remove from the group chat (e.g., "+14155551234"). Must match one of the current participants.',
+      },
+    },
+    required: ['handle'],
+  },
+};
+
 // Web search uses a special tool type - cast to bypass strict typing
 const WEB_SEARCH_TOOL = {
   type: 'web_search_20250305',
@@ -308,6 +325,7 @@ export interface ChatResponse {
   rememberedUser: { name?: string; fact?: string; isForSender?: boolean } | null;
   generatedImage: { url: string; prompt: string } | null;
   groupChatIcon: { prompt: string } | null;
+  removeMember: string | null;
 }
 
 export interface ImageInput {
@@ -417,6 +435,7 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
     rememberedUser: null,
     generatedImage: null,
     groupChatIcon: null,
+    removeMember: null,
   };
 
   const cmd = userMessage.toLowerCase().trim();
@@ -521,7 +540,7 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
     // Build tools list - some tools only available in group chats
     const tools: Anthropic.Tool[] = [REACTION_TOOL, EFFECT_TOOL, REMEMBER_USER_TOOL, GENERATE_IMAGE_TOOL, WEB_SEARCH_TOOL];
     if (chatContext?.isGroupChat) {
-      tools.push(RENAME_CHAT_TOOL, SET_GROUP_ICON_TOOL);
+      tools.push(RENAME_CHAT_TOOL, SET_GROUP_ICON_TOOL, REMOVE_MEMBER_TOOL);
     }
 
     const response = await client.messages.create({
@@ -540,6 +559,7 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
     let rememberedUser: { name?: string; fact?: string; isForSender?: boolean } | null = null;
     let generatedImage: { url: string; prompt: string } | null = null;
     let groupChatIcon: { prompt: string } | null = null;
+    let removeMember: string | null = null;
 
     for (const block of response.content) {
       if (block.type === 'text') {
@@ -606,6 +626,10 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
         console.log(`[claude] Wants to set group icon: ${input.prompt.substring(0, 50)}...`);
         // Don't generate yet - just capture the prompt. We'll generate after sending text.
         groupChatIcon = { prompt: input.prompt };
+      } else if (block.type === 'tool_use' && block.name === 'remove_member') {
+        const input = block.input as { handle: string };
+        removeMember = input.handle;
+        console.log(`[claude] Wants to remove member: ${removeMember}`);
       }
     }
 
@@ -625,7 +649,7 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
       await addMessage(chatId, 'assistant', `[reacted with ${reactionDisplay}]`);
     }
 
-    return { text: textResponse, reaction, effect, renameChat, rememberedUser, generatedImage, groupChatIcon };
+    return { text: textResponse, reaction, effect, renameChat, rememberedUser, generatedImage, groupChatIcon, removeMember };
   } catch (error) {
     console.error('[claude] API error:', error);
     throw error;

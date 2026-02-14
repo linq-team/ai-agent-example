@@ -203,6 +203,33 @@ export async function setGroupChatIcon(chatId: string, iconUrl: string): Promise
   console.log(`[linq] Chat icon updated`);
 }
 
+export async function removeParticipant(chatId: string, handle: string): Promise<void> {
+  if (!API_TOKEN) {
+    throw new Error('LINQ_API_TOKEN not configured');
+  }
+
+  const url = `${BASE_URL}/chats/${chatId}/participants/${encodeURIComponent(handle)}`;
+
+  console.log(`[linq] Removing participant ${handle} from chat ${chatId}`);
+
+  const response = await fetch(url, {
+    method: 'DELETE',
+    headers: {
+      'Authorization': `Bearer ${API_TOKEN}`,
+    },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error(`[linq] API error ${response.status}: ${truncateError(errorText)}`);
+    throw new Error(`Linq API error: ${response.status} ${truncateError(errorText)}`);
+  }
+
+  // Invalidate cache since participants changed
+  chatInfoCache.delete(chatId);
+  console.log(`[linq] Participant ${handle} removed from chat`);
+}
+
 export async function shareContactCard(chatId: string): Promise<void> {
   if (!API_TOKEN) {
     throw new Error('LINQ_API_TOKEN not configured');

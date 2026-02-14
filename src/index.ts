@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import { createWebhookHandler } from './webhook/handler.js';
-import { sendMessage, markAsRead, startTyping, sendReaction, shareContactCard, getChat, renameGroupChat, setGroupChatIcon } from './linq/client.js';
+import { sendMessage, markAsRead, startTyping, sendReaction, shareContactCard, getChat, renameGroupChat, setGroupChatIcon, removeParticipant } from './linq/client.js';
 import { chat, getGroupChatAction, getTextForEffect, generateImage } from './claude/client.js';
 import { getUserProfile, addMessage } from './state/conversation.js';
 
@@ -100,7 +100,7 @@ app.post(
     }
 
     // Get Claude's response (typing indicator shows while this runs)
-    const { text: responseText, reaction, effect, renameChat, rememberedUser, generatedImage, groupChatIcon } = await chat(chatId, text, images, audio, {
+    const { text: responseText, reaction, effect, renameChat, rememberedUser, generatedImage, groupChatIcon, removeMember } = await chat(chatId, text, images, audio, {
       isGroupChat,
       participantNames,
       chatName: chatInfo.display_name,
@@ -110,7 +110,7 @@ app.post(
       service,
     });
     console.log(`[timing] claude: ${Date.now() - start}ms`);
-    console.log(`[debug] responseText: ${responseText ? `"${responseText.substring(0, 50)}..."` : 'null'}, effect: ${effect ? JSON.stringify(effect) : 'null'}, renameChat: ${renameChat || 'null'}, generatedImage: ${generatedImage ? 'yes' : 'null'}`);
+    console.log(`[debug] responseText: ${responseText ? `"${responseText.substring(0, 50)}..."` : 'null'}, effect: ${effect ? JSON.stringify(effect) : 'null'}, renameChat: ${renameChat || 'null'}, generatedImage: ${generatedImage ? 'yes' : 'null'}, removeMember: ${removeMember || 'null'}`);
 
     // Send reaction if Claude wants to
     if (reaction) {
@@ -122,6 +122,16 @@ app.post(
     if (renameChat && isGroupChat) {
       await renameGroupChat(chatId, renameChat);
       console.log(`[timing] renameChat: ${Date.now() - start}ms`);
+    }
+
+    // Remove member from group chat if Claude wants to
+    if (removeMember && isGroupChat) {
+      try {
+        await removeParticipant(chatId, removeMember);
+        console.log(`[timing] removeMember: ${Date.now() - start}ms`);
+      } catch (error) {
+        console.error(`[main] Failed to remove member ${removeMember}:`, error);
+      }
     }
 
     // Send text response if there is one (with optional effect)
@@ -211,7 +221,7 @@ app.post(
         }
       }
 
-      const extras = [effect && 'effect', replyTo && 'thread', generatedImage && 'image', groupChatIcon && 'icon'].filter(Boolean).join(', ');
+      const extras = [effect && 'effect', replyTo && 'thread', generatedImage && 'image', groupChatIcon && 'icon', removeMember && 'removeMember'].filter(Boolean).join(', ');
       console.log(`[timing] total: ${Date.now() - start}ms (${extras || 'text only'})`);
     } else if (reaction) {
       // Reaction-only response - already saved to conversation history by chat()
