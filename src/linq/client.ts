@@ -280,54 +280,66 @@ export async function markAsRead(chatId: string): Promise<void> {
   console.log(`[linq] Chat marked as read`);
 }
 
+// Typing indicators are cosmetic — a failure (e.g. 403 in group chats, where
+// the Linq API doesn't support them yet) must never block message handling.
 export async function startTyping(chatId: string): Promise<void> {
   if (!API_TOKEN) {
-    throw new Error('LINQ_API_TOKEN not configured');
+    console.error('[linq] LINQ_API_TOKEN not configured, skipping typing indicator');
+    return;
   }
 
   const url = `${BASE_URL}/chats/${chatId}/typing`;
 
   console.log(`[linq] Starting typing indicator for chat ${chatId}`);
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${API_TOKEN}`,
-    },
-  });
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${API_TOKEN}`,
+      },
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error(`[linq] API error ${response.status}: ${truncateError(errorText)}`);
-    throw new Error(`Linq API error: ${response.status} ${truncateError(errorText)}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[linq] startTyping failed (non-fatal) ${response.status}: ${truncateError(errorText)}`);
+      return;
+    }
+
+    console.log(`[linq] Typing indicator started`);
+  } catch (error) {
+    console.error('[linq] startTyping failed (non-fatal):', error);
   }
-
-  console.log(`[linq] Typing indicator started`);
 }
 
 export async function stopTyping(chatId: string): Promise<void> {
   if (!API_TOKEN) {
-    throw new Error('LINQ_API_TOKEN not configured');
+    console.error('[linq] LINQ_API_TOKEN not configured, skipping typing indicator');
+    return;
   }
 
   const url = `${BASE_URL}/chats/${chatId}/typing`;
 
   console.log(`[linq] Stopping typing indicator for chat ${chatId}`);
 
-  const response = await fetch(url, {
-    method: 'DELETE',
-    headers: {
-      'Authorization': `Bearer ${API_TOKEN}`,
-    },
-  });
+  try {
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'Authorization': `Bearer ${API_TOKEN}`,
+      },
+    });
 
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error(`[linq] API error ${response.status}: ${truncateError(errorText)}`);
-    throw new Error(`Linq API error: ${response.status} ${truncateError(errorText)}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[linq] stopTyping failed (non-fatal) ${response.status}: ${truncateError(errorText)}`);
+      return;
+    }
+
+    console.log(`[linq] Typing indicator stopped`);
+  } catch (error) {
+    console.error('[linq] stopTyping failed (non-fatal):', error);
   }
-
-  console.log(`[linq] Typing indicator stopped`);
 }
 
 export type StandardReactionType = 'love' | 'like' | 'dislike' | 'laugh' | 'emphasize' | 'question';
