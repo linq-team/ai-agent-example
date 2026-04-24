@@ -689,7 +689,7 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
  */
 export async function getTextForEffect(effectName: string): Promise<string> {
   const response = await client.messages.create({
-    model: 'claude-3-5-haiku-20241022',
+    model: 'claude-haiku-4-5',
     max_tokens: 100,
     messages: [{
       role: 'user',
@@ -740,7 +740,7 @@ export async function getGroupChatAction(
 
   try {
     const response = await client.messages.create({
-      model: 'claude-3-5-haiku-20241022',
+      model: 'claude-haiku-4-5',
       max_tokens: 20,
       system: `You classify how an AI assistant "Claude" should handle messages in a group chat.
 
