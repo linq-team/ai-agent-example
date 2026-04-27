@@ -2,8 +2,9 @@ import 'dotenv/config';
 import express from 'express';
 import { createWebhookHandler } from './webhook/handler.js';
 import { sendMessage, markAsRead, startTyping, sendReaction, shareContactCard, getChat, renameGroupChat, setGroupChatIcon, removeParticipant } from './linq/client.js';
-import { chat, getGroupChatAction, getTextForEffect, generateImage } from './claude/client.js';
+import { chat, getGroupChatAction, getTextForEffect, generateImage, getOptOutConfirmationAction, getOptOutConfirmationPrompt, getOptOutAck } from './claude/client.js';
 import { getUserProfile, addMessage } from './state/conversation.js';
+import { getOptStatus, setPending, confirmOptOut, clearOpt, isOptOutKeyword } from './state/optOut.js';
 
 // Clean up LLM response formatting quirks before sending
 function cleanResponse(text: string): string {
@@ -41,9 +42,59 @@ app.get('/health', (_req, res) => {
 // Webhook endpoint for Linq Blue
 app.post(
   '/webhook',
-  createWebhookHandler(async (chatId, from, text, messageId, images, audio, incomingEffect, incomingReplyTo, service) => {
+  createWebhookHandler({
+    onOptOut: async (handle, chatId) => {
+      // Idempotent — first writer wins, duplicate signals (e.g. webhook + soft-intent
+      // for the same STOP message) collapse into a single pending record.
+      const created = await setPending(handle, 'webhook');
+      if (!created) {
+        console.log(`[main] opt-out: pending/opted_out already set for ${handle}, skipping confirmation`);
+        return;
+      }
+      if (!chatId) {
+        console.log(`[main] opt-out: no chat_id in payload, can't send confirmation`);
+        return;
+      }
+      const prompt = await getOptOutConfirmationPrompt();
+      await sendMessage(chatId, prompt);
+      console.log(`[main] opt-out: sent confirmation to ${handle} in chat ${chatId}`);
+    },
+    onOptIn: async (handle, chatId) => {
+      await clearOpt(handle);
+      if (chatId) {
+        await sendMessage(chatId, "ayy welcome back. lmk what's up");
+      }
+    },
+    onMessage: async (chatId, from, text, messageId, images, audio, incomingEffect, incomingReplyTo, service) => {
     const start = Date.now();
     console.log(`[main] Processing message from ${from}`);
+
+    // Opt-out state machine — runs before any other processing.
+    const optStatus = await getOptStatus(from);
+    if (optStatus?.status === 'opted_out') {
+      console.log(`[main] ${from} is opted out — skipping`);
+      return;
+    }
+    if (optStatus?.status === 'pending') {
+      const action = await getOptOutConfirmationAction(text);
+      if (action === 'confirms') {
+        await confirmOptOut(from);
+        const ack = await getOptOutAck();
+        await sendMessage(chatId, ack);
+        console.log(`[main] opt-out confirmed for ${from} via reply classifier`);
+        return;
+      }
+      // denies | unrelated → clear pending and fall through to normal flow
+      await clearOpt(from);
+      console.log(`[main] opt-out pending cleared for ${from} (reply: ${action})`);
+    }
+
+    // Linq fires `message.opt_out` for these literal keywords; let that
+    // webhook drive the response so we don't double-process.
+    if (isOptOutKeyword(text)) {
+      console.log(`[main] Opt-out keyword "${text}" — deferring to message.opt_out webhook`);
+      return;
+    }
 
     // Track message count for this chat
     const count = (chatMessageCount.get(chatId) || 0) + 1;
@@ -229,6 +280,7 @@ app.post(
     }
 
     console.log(`[main] Reply sent to ${from}`);
+    },
   })
 );
 
