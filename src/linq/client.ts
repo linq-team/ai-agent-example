@@ -1,4 +1,4 @@
-// Linq Blue V3 API Client
+// Linq V3 API Client
 // Ref: https://apidocs.linqapp.com/models
 
 const BASE_URL = process.env.LINQ_API_BASE_URL || 'https://api.linqapp.com/api/partner/v3';

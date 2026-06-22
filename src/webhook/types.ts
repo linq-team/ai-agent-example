@@ -1,4 +1,4 @@
-// Linq Blue V3 Webhook Types
+// Linq V3 Webhook Types
 // Ref: https://apidocs.linqapp.com/webhook-events
 
 export interface WebhookEvent {

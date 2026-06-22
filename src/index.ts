@@ -38,7 +38,7 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Webhook endpoint for Linq Blue
+// Webhook endpoint for Linq
 app.post(
   '/webhook',
   createWebhookHandler(async (chatId, from, text, messageId, images, audio, incomingEffect, incomingReplyTo, service) => {
@@ -236,18 +236,18 @@ app.post(
 app.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════╗
-║         Linq Blue <-> Claude Bridge                   ║
+║         Linq <-> Claude Bridge                        ║
 ╠═══════════════════════════════════════════════════════╣
 ║  Server running on http://localhost:${PORT}              ║
 ║                                                       ║
 ║  Endpoints:                                           ║
-║    POST /webhook  - Linq Blue webhook receiver        ║
+║    POST /webhook  - Linq webhook receiver             ║
 ║    GET  /health   - Health check                      ║
 ║                                                       ║
 ║  Next steps:                                          ║
 ║    1. Run: ngrok http ${PORT}                            ║
-║    2. Configure webhook URL in Linq Blue              ║
-║    3. Text your Linq Blue number!                     ║
+║    2. Configure webhook URL in Linq                   ║
+║    3. Text your Linq number!                          ║
 ╚═══════════════════════════════════════════════════════╝
   `);
 });

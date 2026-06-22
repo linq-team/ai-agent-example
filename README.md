@@ -2,7 +2,7 @@
 
 ![Demo Screenshot](demo.png)
 
-**Try it yourself!** Text **[+1 (415) 870-7772](sms:+14158707772)** to chat with Claude Sullivan, our AI agent running on the Linq Blue API.
+**Try it yourself!** Text **[+1 (415) 870-7772](sms:+14158707772)** to chat with Claude Sullivan, our AI agent running on the Linq API.
 
 ---
 
@@ -12,7 +12,7 @@ Want to build your own AI agent with iMessage? **[Sign up for Linq's free sandbo
 
 ---
 
-A demo app showcasing the [Linq Blue v3 API](https://apidocs.linqapp.com). Connects Claude (Anthropic's AI) to iMessage, allowing users to chat with an AI assistant via text message.
+A demo app showcasing the [Linq v3 API](https://apidocs.linqapp.com). Connects Claude (Anthropic's AI) to iMessage, allowing users to chat with an AI assistant via text message.
 
 ## Features
 
@@ -53,7 +53,7 @@ A demo app showcasing the [Linq Blue v3 API](https://apidocs.linqapp.com). Conne
    ngrok http 3000
    ```
 
-5. Configure the ngrok URL as your webhook in Linq Blue, then text your Linq Blue number!
+5. Configure the ngrok URL as your webhook in Linq, then text your Linq number!
 
 ## Configuration
 
@@ -63,10 +63,10 @@ Environment variables in `.env`:
 |----------|-------------|
 | `ANTHROPIC_API_KEY` | Claude API key from Anthropic |
 | `OPENAI_API_KEY` | OpenAI API key for Whisper (voice) and DALL-E (images) |
-| `LINQ_API_TOKEN` | Linq Blue partner API token |
+| `LINQ_API_TOKEN` | Linq partner API token |
 | `LINQ_API_BASE_URL` | Linq API base URL (default: https://api.linqapp.com/api/partner/v3) |
 | `PORT` | Server port (default: 3000) |
-| `LINQ_AGENT_BOT_NUMBERS` | Linq Blue phone numbers this bot runs on (comma-separated) |
+| `LINQ_AGENT_BOT_NUMBERS` | Linq phone numbers this bot runs on (comma-separated) |
 | `IGNORED_SENDERS` | Sender numbers to skip (comma-separated) |
 | `ALLOWED_SENDERS` | If set, only respond to these senders (for local dev) |
 | `NODE_ENV` | Set to `production` to disable debug logging |
@@ -79,7 +79,7 @@ Users can send these commands via iMessage:
 - `/forget me` - Erase user profile (name + facts Claude has learned)
 - `/help` - Show available commands
 
-## Linq Blue API Endpoints Used
+## Linq API Endpoints Used
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -125,7 +125,7 @@ Claude can send messages with iMessage effects:
 ## Architecture
 
 ```
-[User] --iMessage--> [Linq Blue] --webhook--> [This App] --API--> [Claude]
+[User] --iMessage--> [Linq] --webhook--> [This App] --API--> [Claude]
                                                    |                  |
                                                    |    <-- tools <---|
                                                    |    (reactions,   |
@@ -135,12 +135,12 @@ Claude can send messages with iMessage effects:
                                                    |              [OpenAI]
                                                    |              (DALL-E, Whisper)
                                                    v
-[User] <--iMessage-- [Linq Blue] <--API-------- [Reply + Images + Reactions]
+[User] <--iMessage-- [Linq] <--API-------- [Reply + Images + Reactions]
 ```
 
 ### Flow
 
-1. User sends iMessage to Linq Blue number
+1. User sends iMessage to Linq number
 2. Linq sends `message.received` webhook
 3. App marks chat as read + starts typing + gets chat info (parallel)
 4. App detects if group chat (>2 participants)
@@ -178,7 +178,7 @@ src/
 ├── claude/
 │   └── client.ts         # Claude API integration, tools, system prompt
 ├── linq/
-│   └── client.ts         # Linq Blue API functions
+│   └── client.ts         # Linq API functions
 ├── webhook/
 │   ├── handler.ts        # Webhook processing, phone filtering
 │   └── types.ts          # TypeScript types for webhook events
