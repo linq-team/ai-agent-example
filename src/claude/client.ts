@@ -802,3 +802,90 @@ Examples:
     return { action: 'ignore' };
   }
 }
+
+export type OptOutConfirmationAction = 'confirms' | 'denies' | 'unrelated';
+
+/**
+ * Classify a reply to a pending opt-out confirmation question.
+ * Bias is `unrelated` on ambiguity — we'd rather keep the user subscribed
+ * than mistakenly opt them out.
+ */
+export async function getOptOutConfirmationAction(message: string): Promise<OptOutConfirmationAction> {
+  const start = Date.now();
+  try {
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 10,
+      system: `The user was just asked: "do you want me to stop messaging you?"
+
+Classify their reply as ONE of:
+- "confirms" - they want to stop (yes, yeah, please do, stop, correct, that's right, etc.)
+- "denies" - they want to keep going (no, nvm, keep going, ignore that, sorry false alarm, etc.)
+- "unrelated" - they changed topic or didn't address it
+
+When unsure, answer "unrelated" — we'd rather keep messaging than wrongly opt someone out.`,
+      messages: [{ role: 'user', content: message }],
+    });
+
+    const answer = response.content[0].type === 'text'
+      ? response.content[0].text.toLowerCase().trim()
+      : 'unrelated';
+
+    let action: OptOutConfirmationAction = 'unrelated';
+    if (answer.includes('confirms')) action = 'confirms';
+    else if (answer.includes('denies')) action = 'denies';
+
+    console.log(`[claude] optOutConfirmation (${Date.now() - start}ms): "${message.substring(0, 40)}..." -> ${action}`);
+    return action;
+  } catch (error) {
+    console.error('[claude] optOutConfirmation error:', error);
+    return 'unrelated';
+  }
+}
+
+/**
+ * Generate a casual, on-brand "do you want me to stop?" question.
+ * Uses Haiku for speed/cost — this fires on every opt-out trigger.
+ */
+export async function getOptOutConfirmationPrompt(): Promise<string> {
+  try {
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 60,
+      system: `Write a short, casual one-line text asking the user to confirm they want to stop receiving messages. Match this voice: casual, lowercase, gen-z texting style, NO emojis. Examples: "wait u want me to dip? lmk if so", "u trying to opt out? just lmk for sure". Just the message text, nothing else.`,
+      messages: [{ role: 'user', content: 'Generate the confirmation question.' }],
+    });
+    if (response.content[0].type === 'text') {
+      return response.content[0].text.trim();
+    }
+  } catch (error) {
+    console.error('[claude] optOutConfirmationPrompt error:', error);
+  }
+  return "wait u want me to stop messaging u? just lmk for sure";
+}
+
+/**
+ * Generate the final opt-out acknowledgment. Always includes the START
+ * resubscribe phrase since that's compliance-adjacent.
+ */
+export async function getOptOutAck(): Promise<string> {
+  try {
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 60,
+      system: `Write a short, casual one-line text acknowledging that the user has opted out of receiving messages. The text MUST include the phrase "text START" (or "reply START") so they know how to come back. Match this voice: casual, lowercase, gen-z texting style, NO emojis. Examples: "got it, ill dip. text START anytime to come back", "ok no worries, im out. reply START whenever". Just the message, nothing else.`,
+      messages: [{ role: 'user', content: 'Generate the acknowledgment.' }],
+    });
+    if (response.content[0].type === 'text') {
+      const text = response.content[0].text.trim();
+      // Defensive: enforce the START phrase if Claude forgot it
+      if (!/start/i.test(text)) {
+        return `${text} text START anytime to come back`;
+      }
+      return text;
+    }
+  } catch (error) {
+    console.error('[claude] optOutAck error:', error);
+  }
+  return "ok ill dip. text START anytime to come back";
+}

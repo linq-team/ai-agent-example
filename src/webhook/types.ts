@@ -63,6 +63,34 @@ export function isMessageReceivedEvent(event: WebhookEvent): event is MessageRec
   return event.event_type === 'message.received';
 }
 
+// Opt-out / opt-in events. Payload shape is provisional — Linq's docs don't
+// describe these yet (feature is in development). We accept any data shape
+// and pull `from` / `recipient_phone` defensively in the handler.
+export interface MessageOptOutEvent extends WebhookEvent {
+  event_type: 'message.opt_out';
+  data: OptOutData;
+}
+
+export interface MessageOptInEvent extends WebhookEvent {
+  event_type: 'message.opt_in';
+  data: OptOutData;
+}
+
+export interface OptOutData {
+  from?: string;
+  recipient_phone?: string;
+  chat_id?: string;
+  [key: string]: unknown;
+}
+
+export function isMessageOptOutEvent(event: WebhookEvent): event is MessageOptOutEvent {
+  return event.event_type === 'message.opt_out';
+}
+
+export function isMessageOptInEvent(event: WebhookEvent): event is MessageOptInEvent {
+  return event.event_type === 'message.opt_in';
+}
+
 export function extractTextContent(parts: MessagePart[]): string {
   return parts
     .filter((part): part is TextPart => part.type === 'text')

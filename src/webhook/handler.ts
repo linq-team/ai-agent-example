@@ -2,6 +2,8 @@ import { Request, Response } from 'express';
 import {
   WebhookEvent,
   isMessageReceivedEvent,
+  isMessageOptOutEvent,
+  isMessageOptInEvent,
   extractTextContent,
   extractImageUrls,
   extractAudioUrls,
@@ -16,7 +18,20 @@ export interface MessageHandler {
   (chatId: string, from: string, text: string, messageId: string, images: ExtractedMedia[], audio: ExtractedMedia[], incomingEffect?: MessageEffect, incomingReplyTo?: ReplyTo, service?: MessageService): Promise<void>;
 }
 
-export function createWebhookHandler(onMessage: MessageHandler) {
+export interface OptHandler {
+  (handle: string, chatId: string | undefined, recipientPhone: string | undefined): Promise<void>;
+}
+
+export interface WebhookHandlers {
+  onMessage: MessageHandler;
+  onOptOut?: OptHandler;
+  onOptIn?: OptHandler;
+}
+
+export function createWebhookHandler(handlers: WebhookHandlers | MessageHandler) {
+  const { onMessage, onOptOut, onOptIn } = typeof handlers === 'function'
+    ? { onMessage: handlers, onOptOut: undefined, onOptIn: undefined }
+    : handlers;
   // Bot numbers this agent runs on (comma-separated, supports multiple)
   // If not set, responds to messages to any number
   const botNumbers = process.env.LINQ_AGENT_BOT_NUMBERS?.split(',').map(p => p.trim()).filter(Boolean) || [];
@@ -33,6 +48,28 @@ export function createWebhookHandler(onMessage: MessageHandler) {
 
     // Acknowledge receipt immediately
     res.status(200).json({ received: true });
+
+    // Opt-out / opt-in events fire alongside `message.received` for keyword
+    // matches (e.g. STOP), and on their own for any future signals.
+    if (isMessageOptOutEvent(event) || isMessageOptInEvent(event)) {
+      console.log(`[webhook] Opt event payload:`, JSON.stringify(event.data));
+      const data = event.data;
+      const handle = data?.from;
+      if (!handle) {
+        console.log(`[webhook] Opt event missing 'from' field — ignoring`);
+        return;
+      }
+      try {
+        if (isMessageOptOutEvent(event) && onOptOut) {
+          await onOptOut(handle, data.chat_id, data.recipient_phone);
+        } else if (isMessageOptInEvent(event) && onOptIn) {
+          await onOptIn(handle, data.chat_id, data.recipient_phone);
+        }
+      } catch (error) {
+        console.error(`[webhook] Error handling opt event:`, error);
+      }
+      return;
+    }
 
     // Process message.received events
     if (isMessageReceivedEvent(event)) {
