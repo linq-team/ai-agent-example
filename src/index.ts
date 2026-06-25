@@ -4,24 +4,7 @@ import { createWebhookHandler } from './webhook/handler.js';
 import { sendMessage, markAsRead, startTyping, sendReaction, shareContactCard, getChat, renameGroupChat, setGroupChatIcon, removeParticipant } from './linq/client.js';
 import { chat, getGroupChatAction, getTextForEffect, generateImage } from './claude/client.js';
 import { getUserProfile, addMessage } from './state/conversation.js';
-
-// Clean up LLM response formatting quirks before sending
-function cleanResponse(text: string): string {
-  return text
-    // Turn newline-dash into inline dash (e.g., "foo\n - bar" → "foo - bar")
-    .replace(/\n\s*-\s*/g, ' - ')
-    // Remove markdown underlines/italics (_text_ → text)
-    .replace(/(?<!\w)_([^_]+)_(?!\w)/g, '$1')
-    // Remove markdown bold (**text** → text)
-    .replace(/\*\*([^*]+)\*\*/g, '$1')
-    // Remove stray asterisks used for emphasis
-    .replace(/(?<!\w)\*([^*]+)\*(?!\w)/g, '$1')
-    // Clean up multiple spaces
-    .replace(/  +/g, ' ')
-    // Clean up extra newlines (but preserve intentional double-newlines for --- splits)
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
+import { processResponse } from './text/decorations.js';
 
 // Track message count per chat for contact card sharing
 const chatMessageCount = new Map<string, number>();
@@ -156,9 +139,11 @@ app.post(
     }
 
     if (finalText || generatedImage || groupChatIcon) {
-      // Split into multiple messages first, then clean each one
-      // (must split before cleaning, or the --- delimiter gets mangled)
-      const messages = finalText ? finalText.split('---').map(m => cleanResponse(m)).filter(m => m.length > 0) : [];
+      // Split into multiple messages, then process text decoration markup.
+      // iMessage receives native text_decorations; SMS/RCS receive plain text.
+      const isIMessage = service === 'iMessage' || service === undefined;
+      const rawMessages = finalText ? finalText.split('---').map(m => m.trim()).filter(m => m.length > 0) : [];
+      const messages = rawMessages.map(m => processResponse(m, isIMessage));
 
       // If the incoming message was a reply, continue the thread by replying to that message
       const replyTo = incomingReplyTo ? { message_id: messageId } : undefined;
@@ -166,13 +151,14 @@ app.post(
       // Send text messages first (before generating image)
       if (messages.length > 0) {
         for (let i = 0; i < messages.length; i++) {
+          const { text: msgText, decorations } = messages[i];
           const isLastMessage = i === messages.length - 1;
           // Only apply effect to the last text message (if no image coming)
           const messageEffect = (isLastMessage && !generatedImage) ? effect ?? undefined : undefined;
           // Only thread the first message
           const messageReplyTo = (i === 0) ? replyTo : undefined;
 
-          await sendMessage(chatId, messages[i], messageEffect, messageReplyTo);
+          await sendMessage(chatId, msgText, messageEffect, messageReplyTo, undefined, decorations.length > 0 ? decorations : undefined);
 
           // Add a natural delay between messages (except after the last one)
           if (!isLastMessage) {

@@ -69,6 +69,13 @@ export type ScreenEffect = 'confetti' | 'fireworks' | 'lasers' | 'sparkles' | 'c
 export type BubbleEffect = 'slam' | 'loud' | 'gentle' | 'invisible_ink';
 export type MessageEffect = { type: 'screen' | 'bubble'; name: string };
 export type ReplyTo = { message_id: string; part_index?: number };
+export type TextDecorationStyle = 'bold' | 'italic' | 'strikethrough' | 'underline';
+export type TextDecorationAnimation = 'big' | 'small' | 'shake' | 'nod' | 'explode' | 'ripple' | 'bloom' | 'jitter';
+export type TextDecoration = {
+  range: [number, number];
+  style?: TextDecorationStyle;
+  animation?: TextDecorationAnimation;
+};
 
 export interface SendMessageResponse {
   chat_id: string;
@@ -85,7 +92,7 @@ export interface MediaAttachment {
   url: string;
 }
 
-export async function sendMessage(chatId: string, text: string, effect?: MessageEffect, replyTo?: ReplyTo, media?: MediaAttachment[]): Promise<SendMessageResponse> {
+export async function sendMessage(chatId: string, text: string, effect?: MessageEffect, replyTo?: ReplyTo, media?: MediaAttachment[], textDecorations?: TextDecoration[]): Promise<SendMessageResponse> {
   if (!API_TOKEN) {
     throw new Error('LINQ_API_TOKEN not configured');
   }
@@ -96,13 +103,18 @@ export async function sendMessage(chatId: string, text: string, effect?: Message
   if (effect) extras.push('effect');
   if (replyTo) extras.push('reply');
   if (media?.length) extras.push(`${media.length} image(s)`);
+  if (textDecorations?.length) extras.push(`${textDecorations.length} decoration(s)`);
   console.log(`[linq] Sending message to chat ${chatId}${extras.length ? ` with ${extras.join(', ')}` : ''}`);
 
   // Build message parts: text first, then any media
-  const parts: Array<{ type: string; value?: string; url?: string }> = [];
+  const parts: Array<{ type: string; value?: string; url?: string; text_decorations?: TextDecoration[] }> = [];
 
   if (text) {
-    parts.push({ type: 'text', value: text });
+    const textPart: { type: string; value: string; text_decorations?: TextDecoration[] } = { type: 'text', value: text };
+    if (textDecorations && textDecorations.length > 0) {
+      textPart.text_decorations = textDecorations;
+    }
+    parts.push(textPart);
   }
 
   if (media) {
