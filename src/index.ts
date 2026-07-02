@@ -4,6 +4,7 @@ import { createWebhookHandler } from './webhook/handler.js';
 import { sendMessage, markAsRead, startTyping, sendReaction, shareContactCard, getChat, renameGroupChat, setGroupChatIcon, removeParticipant } from './linq/client.js';
 import { chat, getGroupChatAction, getTextForEffect, generateImage } from './claude/client.js';
 import { getUserProfile, addMessage } from './state/conversation.js';
+import { getImage, setPublicBaseUrl } from './state/imageStore.js';
 import { processResponse } from './text/decorations.js';
 
 // Track message count per chat for contact card sharing
@@ -19,6 +20,28 @@ app.use(express.json());
 // Health check
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Serve generated images so Linq can download them (gpt-image models return
+// base64, not a hosted URL like DALL-E did)
+app.get('/images/:id', (req, res) => {
+  const image = getImage(req.params.id);
+  if (!image) {
+    res.status(404).json({ error: 'not found or expired' });
+    return;
+  }
+  res.set('Content-Type', image.contentType).send(image.buffer);
+});
+
+// Learn our public URL from incoming webhook requests (used to build
+// generated-image URLs; PUBLIC_BASE_URL env var overrides)
+app.use('/webhook', (req, _res, next) => {
+  const host = req.get('host');
+  if (host) {
+    const proto = req.get('x-forwarded-proto')?.split(',')[0] ?? req.protocol;
+    setPublicBaseUrl(`${proto}://${host}`);
+  }
+  next();
 });
 
 // Webhook endpoint for Linq

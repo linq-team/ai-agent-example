@@ -34,7 +34,8 @@
     "@aws-sdk/lib-dynamodb": "^3.971.0",
     "dotenv": "^17.2.3",
     "express": "^4.21.0",
-    "openai": "^6.16.0"
+    "openai": "^6.16.0",
+    "sharp": "^0.33.5"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
