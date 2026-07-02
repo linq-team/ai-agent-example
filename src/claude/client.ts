@@ -1,6 +1,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
+import sharp from 'sharp';
 import { getConversation, addMessage, clearConversation, getUserProfile, setUserName, addUserFact, clearUserProfile, UserProfile, StoredMessage } from '../state/conversation.js';
+import { storeImage } from '../state/imageStore.js';
 
 const client = new Anthropic();
 const openai = new OpenAI();
@@ -97,16 +99,15 @@ You can use standard tapbacks OR any custom emoji:
 Custom emoji reactions are more expressive and fun - use them when a standard tapback doesn't capture the vibe!
 
 CRITICAL REACTION RULES:
-1. DEFAULT to text responses - reactions are supplementary, not primary
-2. NEVER react without also sending a text response unless it's truly just an acknowledgment
+1. ALWAYS send a text response - reactions are a bonus ON TOP of text, never a replacement for it
+2. A reaction is NEVER a valid answer to a question. If someone asks you anything ("how do I...", "what is...", "can you..."), you MUST reply with text
 3. If you've reacted recently, DO NOT react again - respond with text instead
 4. If someone is asking you something or talking to you, RESPOND WITH TEXT
-5. Reactions alone can feel dismissive - when in doubt, send text
+5. Reactions alone feel dismissive - like being left on read. When in doubt, send text
 6. NEVER write "[reacted with ...]" in your text - that's just a system marker in history! When you use send_reaction, just send normal text alongside it
 
-When to use reactions (sparingly):
+When to use reactions (sparingly, and almost always WITH a text response):
 - love: Heartfelt news (promotions, engagements)
-- like: Simple acknowledgment when no text response needed
 - laugh: Genuinely funny messages
 - Custom emoji: When you want to be more expressive (🔥 for something cool, 💀 for something hilarious, etc.)
 
@@ -285,7 +286,7 @@ const REMEMBER_USER_TOOL: Anthropic.Tool = {
 
 const GENERATE_IMAGE_TOOL: Anthropic.Tool = {
   name: 'generate_image',
-  description: 'Generate an image using DALL-E. Use when the user asks you to create, draw, generate, or make an image/picture/photo. Expand their request into a detailed prompt for better results. IMPORTANT: You MUST also write a brief text message (like "on it, making that corgi now" or "lemme draw that for u") - this message will be sent BEFORE the image starts generating so the user knows something is happening.',
+  description: 'Generate an image. Use when the user asks you to create, draw, generate, or make an image/picture/photo. Expand their request into a detailed prompt for better results. IMPORTANT: You MUST also write a brief text message (like "on it, making that corgi now" or "lemme draw that for u") - this message will be sent BEFORE the image starts generating so the user knows something is happening.',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -300,7 +301,7 @@ const GENERATE_IMAGE_TOOL: Anthropic.Tool = {
 
 const SET_GROUP_ICON_TOOL: Anthropic.Tool = {
   name: 'set_group_chat_icon',
-  description: 'Set the group chat icon/photo using a DALL-E generated image. ONLY use in group chats when someone explicitly asks to set/change the group icon/photo/picture. Expand their request into a detailed prompt. IMPORTANT: You MUST also write a brief text message acknowledging the request.',
+  description: 'Set the group chat icon/photo using a generated image. ONLY use in group chats when someone explicitly asks to set/change the group icon/photo/picture. Expand their request into a detailed prompt. IMPORTANT: You MUST also write a brief text message acknowledging the request.',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -366,28 +367,76 @@ export interface AudioInput {
   mimeType: string;
 }
 
-// Generate an image using OpenAI DALL-E API
+// Generate an image using OpenAI's image API. gpt-image models return base64
+// only (no hosted URL), so we stash the bytes in the image store and return a
+// URL served by this app that Linq can download from.
 export async function generateImage(prompt: string): Promise<string | null> {
   try {
-    console.log(`[claude] Generating image with DALL-E: "${prompt.substring(0, 50)}..."`);
+    console.log(`[claude] Generating image with gpt-image-1: "${prompt.substring(0, 50)}..."`);
     const response = await openai.images.generate({
-      model: 'dall-e-3',
+      model: 'gpt-image-1',
       prompt: prompt,
       n: 1,
       size: '1024x1024',
-      quality: 'standard',
+      quality: 'medium',
     });
 
-    const imageUrl = response.data?.[0]?.url;
-    if (imageUrl) {
-      console.log(`[claude] Image generated: ${imageUrl.substring(0, 50)}...`);
-      return imageUrl;
+    const b64 = response.data?.[0]?.b64_json;
+    if (!b64) {
+      console.error('[claude] No image data in gpt-image-1 response');
+      return null;
     }
-    console.error('[claude] No image URL in DALL-E response');
-    return null;
+
+    const imageUrl = storeImage(Buffer.from(b64, 'base64'), 'image/png');
+    if (imageUrl) {
+      console.log(`[claude] Image generated: ${imageUrl}`);
+    }
+    return imageUrl;
   } catch (error) {
-    console.error('[claude] DALL-E error:', error);
+    console.error('[claude] Image generation error:', error);
     return null;
+  }
+}
+
+// Claude API limits: max 8000px on any dimension, ~5MB per image. iPhone
+// screenshots of long threads regularly blow past 8000px and previously
+// 400'd the whole request. Oversized images get downscaled and re-encoded;
+// everything else passes through as a URL source like before.
+const MAX_IMAGE_DIMENSION = 7500;
+const MAX_IMAGE_BYTES = 4.5 * 1024 * 1024;
+const RESIZE_TARGET = 2048;
+
+async function prepareImageBlock(image: ImageInput): Promise<Anthropic.ImageBlockParam> {
+  const urlBlock: Anthropic.ImageBlockParam = {
+    type: 'image',
+    source: { type: 'url', url: image.url },
+  };
+
+  try {
+    const response = await fetch(image.url);
+    if (!response.ok) throw new Error(`fetch failed: ${response.status}`);
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    const metadata = await sharp(buffer).metadata();
+    const maxDim = Math.max(metadata.width ?? 0, metadata.height ?? 0);
+    if (maxDim <= MAX_IMAGE_DIMENSION && buffer.byteLength <= MAX_IMAGE_BYTES) {
+      return urlBlock;
+    }
+
+    console.log(`[claude] Resizing oversized image (${metadata.width}x${metadata.height}, ${Math.round(buffer.byteLength / 1024)}KB): ${image.url.substring(0, 50)}...`);
+    const resized = await sharp(buffer)
+      .rotate() // apply EXIF orientation before resizing
+      .resize(RESIZE_TARGET, RESIZE_TARGET, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+
+    return {
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/jpeg', data: resized.toString('base64') },
+    };
+  } catch (error) {
+    console.error('[claude] Image prep failed, passing URL through:', error);
+    return urlBlock;
   }
 }
 
@@ -504,17 +553,12 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
   // Build message content (text + images + audio)
   const messageContent: Anthropic.ContentBlockParam[] = [];
 
-  // Add images first
-  for (const image of images) {
-    messageContent.push({
-      type: 'image',
-      source: {
-        type: 'url',
-        url: image.url,
-      },
-    });
+  // Add images first (resized if they exceed Claude's limits)
+  const imageBlocks = await Promise.all(images.map(image => {
     console.log(`[claude] Including image: ${image.url.substring(0, 50)}...`);
-  }
+    return prepareImageBlock(image);
+  }));
+  messageContent.push(...imageBlocks);
 
   // Transcribe audio files and add as text context
   const transcriptions: string[] = [];
@@ -661,7 +705,50 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
       }
     }
 
-    const textResponse = textParts.length > 0 ? textParts.join('\n') : null;
+    let textResponse: string | null = textParts.length > 0 ? textParts.join('\n') : null;
+
+    // Guardrail: Sonnet sometimes tapbacks a message instead of answering it,
+    // despite the prompt rules (e.g. thumbs-upping "how can I be an expert in
+    // geoguessr?"). A reaction alone is never a sufficient reply from chat() -
+    // in group chats the Haiku classifier already routes reaction-worthy
+    // messages to a quick reaction before Sonnet is invoked. Continue the
+    // tool loop and require a text reply.
+    if (!textResponse && reaction && !effect && !generatedImage && !groupChatIcon && !renameChat && !removeMember) {
+      console.log('[claude] Reaction-only response - requesting text follow-up');
+      try {
+        const toolResults: Anthropic.ToolResultBlockParam[] = response.content
+          .filter((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use')
+          .map(block => ({
+            type: 'tool_result' as const,
+            tool_use_id: block.id,
+            content: block.name === 'send_reaction'
+              ? 'Reaction sent. A reaction alone is not a sufficient reply - now write your text response to their message. Do not use any more tools.'
+              : 'Done.',
+          }));
+        const followUp = await client.messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1024,
+          system: buildSystemPrompt(chatContext),
+          tools,
+          messages: [
+            ...formattedHistory,
+            { role: 'user', content: messageContent },
+            { role: 'assistant', content: response.content },
+            { role: 'user', content: toolResults },
+          ],
+        });
+        const followUpText = followUp.content
+          .map(block => (block.type === 'text' ? block.text : ''))
+          .filter(Boolean)
+          .join('\n');
+        if (followUpText) {
+          textResponse = followUpText;
+          console.log('[claude] Got text follow-up after reaction-only response');
+        }
+      } catch (error) {
+        console.error('[claude] Text follow-up failed (keeping reaction-only):', error);
+      }
+    }
 
     // Add assistant response to history (only text part, strip --- delimiters for cleaner context)
     // Note: image generation is handled separately in index.ts after sending text first
