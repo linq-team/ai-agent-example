@@ -99,16 +99,15 @@ You can use standard tapbacks OR any custom emoji:
 Custom emoji reactions are more expressive and fun - use them when a standard tapback doesn't capture the vibe!
 
 CRITICAL REACTION RULES:
-1. DEFAULT to text responses - reactions are supplementary, not primary
-2. NEVER react without also sending a text response unless it's truly just an acknowledgment
+1. ALWAYS send a text response - reactions are a bonus ON TOP of text, never a replacement for it
+2. A reaction is NEVER a valid answer to a question. If someone asks you anything ("how do I...", "what is...", "can you..."), you MUST reply with text
 3. If you've reacted recently, DO NOT react again - respond with text instead
 4. If someone is asking you something or talking to you, RESPOND WITH TEXT
-5. Reactions alone can feel dismissive - when in doubt, send text
+5. Reactions alone feel dismissive - like being left on read. When in doubt, send text
 6. NEVER write "[reacted with ...]" in your text - that's just a system marker in history! When you use send_reaction, just send normal text alongside it
 
-When to use reactions (sparingly):
+When to use reactions (sparingly, and almost always WITH a text response):
 - love: Heartfelt news (promotions, engagements)
-- like: Simple acknowledgment when no text response needed
 - laugh: Genuinely funny messages
 - Custom emoji: When you want to be more expressive (🔥 for something cool, 💀 for something hilarious, etc.)
 
@@ -706,7 +705,50 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
       }
     }
 
-    const textResponse = textParts.length > 0 ? textParts.join('\n') : null;
+    let textResponse: string | null = textParts.length > 0 ? textParts.join('\n') : null;
+
+    // Guardrail: Sonnet sometimes tapbacks a message instead of answering it,
+    // despite the prompt rules (e.g. thumbs-upping "how can I be an expert in
+    // geoguessr?"). A reaction alone is never a sufficient reply from chat() -
+    // in group chats the Haiku classifier already routes reaction-worthy
+    // messages to a quick reaction before Sonnet is invoked. Continue the
+    // tool loop and require a text reply.
+    if (!textResponse && reaction && !effect && !generatedImage && !groupChatIcon && !renameChat && !removeMember) {
+      console.log('[claude] Reaction-only response - requesting text follow-up');
+      try {
+        const toolResults: Anthropic.ToolResultBlockParam[] = response.content
+          .filter((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use')
+          .map(block => ({
+            type: 'tool_result' as const,
+            tool_use_id: block.id,
+            content: block.name === 'send_reaction'
+              ? 'Reaction sent. A reaction alone is not a sufficient reply - now write your text response to their message. Do not use any more tools.'
+              : 'Done.',
+          }));
+        const followUp = await client.messages.create({
+          model: 'claude-sonnet-4-6',
+          max_tokens: 1024,
+          system: buildSystemPrompt(chatContext),
+          tools,
+          messages: [
+            ...formattedHistory,
+            { role: 'user', content: messageContent },
+            { role: 'assistant', content: response.content },
+            { role: 'user', content: toolResults },
+          ],
+        });
+        const followUpText = followUp.content
+          .map(block => (block.type === 'text' ? block.text : ''))
+          .filter(Boolean)
+          .join('\n');
+        if (followUpText) {
+          textResponse = followUpText;
+          console.log('[claude] Got text follow-up after reaction-only response');
+        }
+      } catch (error) {
+        console.error('[claude] Text follow-up failed (keeping reaction-only):', error);
+      }
+    }
 
     // Add assistant response to history (only text part, strip --- delimiters for cleaner context)
     // Note: image generation is handled separately in index.ts after sending text first
