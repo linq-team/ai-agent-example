@@ -231,8 +231,8 @@ docker run -p 3000:3000 --env-file .env linq-blue-agent
 
 ## Models Used
 
-- **Main responses**: Claude Sonnet 4 - balanced quality and speed
-- **Group chat filtering**: Claude Haiku 3.5 - fast/cheap for quick decisions
+- **Main responses**: Claude Haiku 4.5 (configurable via `CLAUDE_MODEL`)
+- **Group chat filtering**: Claude Haiku 4.5 - fast/cheap for quick decisions
 
 ## API Documentation
 
