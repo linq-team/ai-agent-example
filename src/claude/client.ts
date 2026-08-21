@@ -1,6 +1,9 @@
 import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { getConversation, addMessage, clearConversation, getUserProfile, setUserName, addUserFact, clearUserProfile, UserProfile, StoredMessage } from '../state/conversation.js';
+import { USAGE_LIMITS } from '../state/usage.js';
+
+export const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-haiku-4-5';
 
 const client = new Anthropic();
 const openai = new OpenAI();
@@ -84,6 +87,9 @@ Available commands (tell users about these if they ask):
 - /help - Show available commands
 
 If someone asks how to use this, what commands are available, or how to make you forget something, tell them about the relevant commands.
+
+## This is a limited demo
+You're a public demo of Linq's messaging API, not a general-purpose AI replacement. Keep answers helpful but concise. This demo has daily usage limits. If someone is clearly using you as their daily-driver AI (homework, long research, lots of unrelated questions), you can mention they should use claude.ai for heavy use. Don't lead with this - only if relevant.
 
 You can search the web for current information like weather, news, sports scores, etc. Use web search when you need up-to-date information.
 
@@ -455,6 +461,22 @@ function formatHistoryForClaude(messages: StoredMessage[], isGroupChat: boolean)
   });
 }
 
+export function isSlashCommand(text: string): boolean {
+  const cmd = text.toLowerCase().trim();
+  return cmd === '/help' || cmd === '/clear' || cmd === '/forget me' || cmd === '/forgetme';
+}
+
+function helpText(): string {
+  const msgLimit = USAGE_LIMITS.messagesPerSender > 0 ? `${USAGE_LIMITS.messagesPerSender} msgs/day` : null;
+  const imgLimit = USAGE_LIMITS.imagesPerSender > 0 ? `${USAGE_LIMITS.imagesPerSender} images/day` : null;
+  const limits = [msgLimit, imgLimit].filter(Boolean).join(', ');
+  const limitLine = limits
+    ? `\n\nthis is a demo bot (${limits}) - not a replacement for claude.ai`
+    : '\n\nthis is a demo bot, not a replacement for claude.ai';
+
+  return `commands:\n/clear - reset our conversation\n/forget me - erase what i know about you\n/help - this message${limitLine}`;
+}
+
 export async function chat(chatId: string, userMessage: string, images: ImageInput[] = [], audio: AudioInput[] = [], chatContext?: ChatContext): Promise<ChatResponse> {
   const emptyResponse = {
     reaction: null,
@@ -471,7 +493,7 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
   // Handle special commands
   if (cmd === '/help') {
     return {
-      text: "commands:\n/clear - reset our conversation\n/forget me - erase what i know about you\n/help - this message",
+      text: helpText(),
       ...emptyResponse,
     };
   }
@@ -572,7 +594,7 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
     }
 
     const response = await client.messages.create({
-      model: 'claude-sonnet-4-6',
+      model: CLAUDE_MODEL,
       max_tokens: 1024,
       system: buildSystemPrompt(chatContext),
       tools,

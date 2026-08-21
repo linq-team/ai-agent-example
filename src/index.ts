@@ -2,8 +2,8 @@ import 'dotenv/config';
 import express from 'express';
 import { createWebhookHandler } from './webhook/handler.js';
 import { sendMessage, markAsRead, startTyping, sendReaction, shareContactCard, getChat, renameGroupChat, setGroupChatIcon, removeParticipant } from './linq/client.js';
-import { chat, getGroupChatAction, getTextForEffect, generateImage } from './claude/client.js';
-import { getUserProfile, addMessage } from './state/conversation.js';
+import { chat, getGroupChatAction, getTextForEffect, generateImage, isSlashCommand, CLAUDE_MODEL } from './claude/client.js';
+import { getUserProfile, addMessage, consumeMessageQuota, consumeImageQuota, logUsageConfig } from './state/index.js';
 import { processResponse } from './text/decorations.js';
 
 // Track message count per chat for contact card sharing
@@ -35,14 +35,15 @@ app.post(
     // Share contact card on first message or every N messages
     const shouldShareContact = count === 1 || count % CONTACT_CARD_INTERVAL === 0;
 
-    // Mark as read, start typing, get chat info, and fetch user profile in parallel
-    const parallelTasks: Promise<unknown>[] = [markAsRead(chatId), startTyping(chatId), getChat(chatId), getUserProfile(from)];
+    // Mark as read, get chat info, and fetch user profile in parallel.
+    // Typing starts later, after usage limits pass, so we don't look like we're thinking when we'll actually ignore.
+    const parallelTasks: Promise<unknown>[] = [markAsRead(chatId), getChat(chatId), getUserProfile(from)];
     if (shouldShareContact) {
       console.log(`[main] Sharing contact card (message #${count})`);
       parallelTasks.push(shareContactCard(chatId));
     }
-    const [, , chatInfo, senderProfile] = await Promise.all(parallelTasks) as [void, void, Awaited<ReturnType<typeof getChat>>, Awaited<ReturnType<typeof getUserProfile>>];
-    console.log(`[timing] markAsRead+startTyping+getChat+getProfile${shouldShareContact ? '+shareContact' : ''}: ${Date.now() - start}ms`);
+    const [, chatInfo, senderProfile] = await Promise.all(parallelTasks) as [void, Awaited<ReturnType<typeof getChat>>, Awaited<ReturnType<typeof getUserProfile>>];
+    console.log(`[timing] markAsRead+getChat+getProfile${shouldShareContact ? '+shareContact' : ''}: ${Date.now() - start}ms`);
     if (senderProfile?.name) {
       console.log(`[main] Known user: ${senderProfile.name} (${senderProfile.facts.length} facts)`);
     }
@@ -81,6 +82,20 @@ app.post(
     } else if (isGroupChat) {
       console.log(`[main] Responding to group media (skipping classifier)`);
     }
+
+    // Slash commands are free; everything else counts against daily/rate limits
+    if (!isSlashCommand(text)) {
+      const quota = await consumeMessageQuota(from, chatId);
+      if (!quota.allowed) {
+        console.log(`[main] Usage limited (${quota.reason}) for ${from}`);
+        if (quota.notify) {
+          await sendMessage(chatId, quota.message);
+        }
+        return;
+      }
+    }
+
+    await startTyping(chatId);
 
     // Get Claude's response (typing indicator shows while this runs)
     const { text: responseText, reaction, effect, renameChat, rememberedUser, generatedImage, groupChatIcon, removeMember } = await chat(chatId, text, images, audio, {
@@ -171,39 +186,49 @@ app.post(
 
       // Now generate and send image if requested
       if (generatedImage) {
-        // Show typing indicator while generating (takes ~15 seconds)
-        await startTyping(chatId);
-        console.log(`[main] Generating image after sending text...`);
-        const imageUrl = await generateImage(generatedImage.prompt);
-        if (imageUrl) {
-          // Small delay before sending image
-          await new Promise(resolve => setTimeout(resolve, 300));
-          await sendMessage(chatId, '', effect ?? undefined, undefined, [{ url: imageUrl }]);
-          // Save to conversation history
-          await addMessage(chatId, 'assistant', `[generated an image: ${generatedImage.prompt.substring(0, 50)}...]`);
-          console.log(`[timing] generateImage + sendImage: ${Date.now() - start}ms`);
+        const imageQuota = await consumeImageQuota(from);
+        if (!imageQuota.allowed) {
+          await sendMessage(chatId, imageQuota.message);
         } else {
-          // Image generation failed - let user know
-          await sendMessage(chatId, 'sorry the image didnt work, try again?');
-          console.log(`[main] Image generation failed`);
+          // Show typing indicator while generating (takes ~15 seconds)
+          await startTyping(chatId);
+          console.log(`[main] Generating image after sending text...`);
+          const imageUrl = await generateImage(generatedImage.prompt);
+          if (imageUrl) {
+            // Small delay before sending image
+            await new Promise(resolve => setTimeout(resolve, 300));
+            await sendMessage(chatId, '', effect ?? undefined, undefined, [{ url: imageUrl }]);
+            // Save to conversation history
+            await addMessage(chatId, 'assistant', `[generated an image: ${generatedImage.prompt.substring(0, 50)}...]`);
+            console.log(`[timing] generateImage + sendImage: ${Date.now() - start}ms`);
+          } else {
+            // Image generation failed - let user know
+            await sendMessage(chatId, 'sorry the image didnt work, try again?');
+            console.log(`[main] Image generation failed`);
+          }
         }
       }
 
       // Generate and set group chat icon if requested
       if (groupChatIcon && isGroupChat) {
-        // Show typing indicator while generating (takes ~15 seconds)
-        await startTyping(chatId);
-        console.log(`[main] Generating group chat icon...`);
-        const imageUrl = await generateImage(groupChatIcon.prompt);
-        if (imageUrl) {
-          await setGroupChatIcon(chatId, imageUrl);
-          // Save to conversation history
-          await addMessage(chatId, 'assistant', `[set group chat icon]`);
-          console.log(`[timing] generateIcon + setIcon: ${Date.now() - start}ms`);
+        const iconQuota = await consumeImageQuota(from);
+        if (!iconQuota.allowed) {
+          await sendMessage(chatId, iconQuota.message);
         } else {
-          // Image generation failed - let user know
-          await sendMessage(chatId, 'sorry couldnt set the icon, try again?');
-          console.log(`[main] Group icon generation failed`);
+          // Show typing indicator while generating (takes ~15 seconds)
+          await startTyping(chatId);
+          console.log(`[main] Generating group chat icon...`);
+          const imageUrl = await generateImage(groupChatIcon.prompt);
+          if (imageUrl) {
+            await setGroupChatIcon(chatId, imageUrl);
+            // Save to conversation history
+            await addMessage(chatId, 'assistant', `[set group chat icon]`);
+            console.log(`[timing] generateIcon + setIcon: ${Date.now() - start}ms`);
+          } else {
+            // Image generation failed - let user know
+            await sendMessage(chatId, 'sorry couldnt set the icon, try again?');
+            console.log(`[main] Group icon generation failed`);
+          }
         }
       }
 
@@ -225,6 +250,7 @@ app.listen(PORT, () => {
 ║         Linq <-> Claude Bridge                        ║
 ╠═══════════════════════════════════════════════════════╣
 ║  Server running on http://localhost:${PORT}              ║
+║  Model: ${CLAUDE_MODEL.padEnd(42)}║
 ║                                                       ║
 ║  Endpoints:                                           ║
 ║    POST /webhook  - Linq webhook receiver             ║
@@ -236,4 +262,5 @@ app.listen(PORT, () => {
 ║    3. Text your Linq number!                          ║
 ╚═══════════════════════════════════════════════════════╝
   `);
+  logUsageConfig();
 });
