@@ -85,14 +85,13 @@ export interface SendMessageResponse {
     sent_at: string;
     delivery_status: 'pending' | 'queued' | 'sent' | 'delivered' | 'failed';
     is_read: boolean;
+    service?: 'iMessage' | 'RCS' | 'SMS';
   };
 }
 
-export interface MediaAttachment {
-  url: string;
-}
+export type MediaAttachment = { url: string; attachment_id?: never } | { attachment_id: string; url?: never };
 
-export async function sendMessage(chatId: string, text: string, effect?: MessageEffect, replyTo?: ReplyTo, media?: MediaAttachment[], textDecorations?: TextDecoration[]): Promise<SendMessageResponse> {
+export async function sendMessage(chatId: string, text: string, effect?: MessageEffect, replyTo?: ReplyTo, media?: MediaAttachment[], textDecorations?: TextDecoration[], idempotencyKey?: string): Promise<SendMessageResponse> {
   if (!API_TOKEN) {
     throw new Error('LINQ_API_TOKEN not configured');
   }
@@ -102,12 +101,12 @@ export async function sendMessage(chatId: string, text: string, effect?: Message
   const extras: string[] = [];
   if (effect) extras.push('effect');
   if (replyTo) extras.push('reply');
-  if (media?.length) extras.push(`${media.length} image(s)`);
+  if (media?.length) extras.push(`${media.length} attachment(s)`);
   if (textDecorations?.length) extras.push(`${textDecorations.length} decoration(s)`);
   console.log(`[linq] Sending message to chat ${chatId}${extras.length ? ` with ${extras.join(', ')}` : ''}`);
 
   // Build message parts: text first, then any media
-  const parts: Array<{ type: string; value?: string; url?: string; text_decorations?: TextDecoration[] }> = [];
+  const parts: Array<{ type: string; value?: string; url?: string; attachment_id?: string; text_decorations?: TextDecoration[] }> = [];
 
   if (text) {
     const textPart: { type: string; value: string; text_decorations?: TextDecoration[] } = { type: 'text', value: text };
@@ -119,11 +118,12 @@ export async function sendMessage(chatId: string, text: string, effect?: Message
 
   if (media) {
     for (const m of media) {
-      parts.push({ type: 'media', url: m.url });
+      parts.push({ type: 'media', ...m });
     }
   }
 
   const message: Record<string, unknown> = { parts };
+  if (idempotencyKey) message.idempotency_key = idempotencyKey;
 
   if (effect) {
     message.effect = effect;
@@ -143,6 +143,7 @@ export async function sendMessage(chatId: string, text: string, effect?: Message
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!response.ok) {
@@ -265,6 +266,46 @@ export async function shareContactCard(chatId: string): Promise<void> {
   }
 
   console.log(`[linq] Contact card shared`);
+}
+
+export interface ContactCard {
+  first_name: string;
+  last_name?: string;
+  phone_number: string;
+  image_url?: string;
+  is_active: boolean;
+}
+
+export async function getContactCard(phoneNumber: string): Promise<ContactCard | undefined> {
+  if (!API_TOKEN) throw new Error('LINQ_API_TOKEN not configured');
+  const response = await fetch(`${BASE_URL}/contact_card?${new URLSearchParams({ phone_number: phoneNumber })}`, {
+    headers: { Authorization: `Bearer ${API_TOKEN}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`Contact card lookup failed: ${response.status}`);
+  const data = await response.json() as { contact_cards: ContactCard[] };
+  return data.contact_cards.find(card => card.phone_number === phoneNumber && card.is_active);
+}
+
+export async function uploadContactVCard(contents: Buffer): Promise<{ attachmentId: string; downloadUrl: string }> {
+  if (!API_TOKEN) throw new Error('LINQ_API_TOKEN not configured');
+  const response = await fetch(`${BASE_URL}/attachments`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${API_TOKEN}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename: 'contact.vcf', content_type: 'text/vcard', size_bytes: contents.length }),
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) throw new Error(`Contact attachment creation failed: ${response.status}`);
+  const upload = await response.json() as { attachment_id: string; upload_url: string; download_url: string; required_headers: Record<string, string> };
+  const uploaded = await fetch(upload.upload_url, {
+    method: 'PUT',
+    // Use the signed headers exactly; never forward the Linq bearer token.
+    headers: upload.required_headers,
+    body: new Uint8Array(contents),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!uploaded.ok) throw new Error(`Contact attachment upload failed: ${uploaded.status}`);
+  return { attachmentId: upload.attachment_id, downloadUrl: upload.download_url };
 }
 
 export async function markAsRead(chatId: string): Promise<void> {
