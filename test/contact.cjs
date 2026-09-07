@@ -25,71 +25,98 @@ test('VCF preserves escaped Unicode names, E.164 number, and embedded photo', ()
   assert.throws(() => detectContactPhoto(Buffer.from('<html>error</html>')), /photo/);
 });
 
-function fixture(overrides = {}) {
-  const calls = { lookups: [], uploads: [], sends: [], native: [] };
+function fixture(overrides = {}, records = new Map()) {
+  const calls = { lookups: [], uploads: [], sends: [] };
   const share = createContactSharer({
     getContactCard: async phone => { calls.lookups.push(phone); return { ...contact, phone_number: phone }; },
     downloadPhoto: async () => png,
-    uploadContactVCard: async bytes => { calls.uploads.push(bytes); return 'attachment'; },
-    sendMessage: async (...args) => { calls.sends.push(args); return {}; },
-    shareContactCard: async id => { calls.native.push(id); },
+    uploadContactVCard: async bytes => { calls.uploads.push(bytes); return { attachmentId: 'attachment', downloadUrl: 'https://example.com/contact.vcf' }; },
+    sendMessage: async (...args) => { calls.sends.push(args); return { message: { id: 'sent-message', delivery_status: 'queued' } }; },
+    getContactShareStatus: async (bot, person) => records.get(bot + person)?.shared ? 'shared' : 'not_shared',
+    claimContactShare: async (bot, person, request, owner, requested) => {
+      const record = records.get(bot + person) || {};
+      if (record.owner || record.request === request || (!requested && record.shared)) return false;
+      records.set(bot + person, { ...record, owner }); return true;
+    },
+    completeContactShare: async (bot, person, request) => { records.set(bot + person, { shared: true, request }); },
+    releaseContactShare: async (bot, person) => { const record = records.get(bot + person); if (record) delete record.owner; },
     ...overrides,
   });
-  return { calls, share };
+  return { calls, share, records };
 }
-const request = { chatId: 'chat', botNumber: contact.phone_number, service: 'RCS', shareNative: true };
+const request = {
+  chatId: 'chat', botNumber: contact.phone_number, person: '+14155550200',
+  incomingMessageId: 'incoming', service: 'RCS', isGroupChat: false,
+  requestedByUser: false, message: 'btw here’s my contact if you wanna save me',
+};
 
-test('RCS sends once per chat including concurrent messages, reusing the attachment for another chat', async () => {
-  const { share, calls } = fixture();
-  await Promise.all([share(request), share(request)]);
-  await share(request);
-  await share({ ...request, chatId: 'second' });
-  assert.equal(calls.sends.length, 2);
-  assert.equal(calls.uploads.length, 1);
-  assert.deepEqual(calls.sends[0], ['chat', '', undefined, undefined, [{ attachment_id: 'attachment' }]]);
-  assert.equal(calls.native.length, 0);
+test('proactive RCS tool remembers a person across chats and process restarts, and deduplicates concurrent calls', async () => {
+  const { share, calls, records } = fixture();
+  const results = await Promise.all([share(request), share(request)]);
+  assert.equal(results.filter(r => r.status === 'sent').length, 1);
+  assert.equal(calls.sends.length, 2); // intro, then file
+  const restarted = fixture({}, records);
+  assert.equal((await restarted.share({ ...request, chatId: 'new-chat', incomingMessageId: 'new-event' })).status, 'skipped');
+  assert.equal(restarted.calls.uploads.length, 0);
+  await share({ ...request, person: '+14155550201' });
+  assert.equal(calls.uploads.length, 1); // same bot contact reused for another person
   await share({ ...request, botNumber: '+14155550101' });
   assert.equal(calls.uploads.length, 2);
-  assert.ok(calls.uploads[1].toString().includes('+14155550101'));
 });
 
-test('iMessage uses native sharing; SMS/unknown never get a VCF; switching to RCS works', async () => {
+test('explicit requests work on all services and can resend; repeated webhook cannot resend', async () => {
+  for (const service of ['iMessage', 'RCS', 'SMS']) {
+    const { share, calls } = fixture();
+    const explicit = { ...request, service, requestedByUser: true };
+    assert.equal((await share(explicit)).status, 'sent');
+    assert.equal((await share(explicit)).status, 'skipped');
+    assert.equal((await share({ ...explicit, incomingMessageId: 'resend' })).status, 'sent');
+    assert.equal(calls.sends.length, 4);
+    if (service === 'SMS') {
+      assert.equal(calls.sends[1][1], 'https://example.com/contact.vcf');
+      assert.equal(calls.sends[1][4], undefined);
+    } else assert.deepEqual(calls.sends[1][4], [{ attachment_id: 'attachment' }]);
+    assert.notEqual(calls.sends[1][6], calls.sends[3][6]);
+  }
+});
+
+test('proactive tool never sends in iMessage, SMS, group chats, or unknown history', async () => {
   const { share, calls } = fixture();
-  await share({ ...request, service: 'iMessage' });
-  await share({ ...request, service: 'iMessage', shareNative: false });
-  await share({ ...request, service: 'SMS' });
-  await share({ ...request, service: undefined });
-  assert.deepEqual(calls.native, ['chat']);
-  assert.equal(calls.uploads.length, 0);
-  await share(request);
-  assert.equal(calls.sends.length, 1);
+  for (const service of ['iMessage', 'SMS', undefined]) assert.equal((await share({ ...request, service })).status, 'skipped');
+  assert.equal((await share({ ...request, isGroupChat: true })).status, 'skipped');
+  const unknown = fixture({ getContactShareStatus: async () => 'unknown' });
+  assert.equal((await unknown.share(request)).status, 'skipped');
+  assert.equal(calls.sends.length, 0);
 });
 
-test('failed sends remain retryable and contact failures never reject the reply flow', async () => {
+test('failed sends remain retryable with stable idempotency keys; failed sends are not remembered', async () => {
   let attempts = 0;
-  const { share, calls } = fixture({ sendMessage: async () => { if (++attempts === 1) throw new Error('temporary failure'); } });
-  await assert.doesNotReject(share(request));
-  await share(request);
-  await share(request);
-  assert.equal(attempts, 2);
-  assert.equal(calls.uploads.length, 1);
+  const keys = [];
+  const { share, records } = fixture({ sendMessage: async (...args) => {
+    keys.push(args[6]);
+    if (++attempts === 2) throw new Error('temporary failure');
+    return { message: { id: 'sent', delivery_status: 'queued' } };
+  } });
+  assert.equal((await share(request)).status, 'failed');
+  assert.equal(records.get(request.botNumber + request.person).shared, undefined);
+  assert.equal((await share(request)).status, 'sent');
+  assert.equal(keys[0], keys[2]); assert.equal(keys[1], keys[3]);
   const missing = fixture({ getContactCard: async () => undefined });
-  await assert.doesNotReject(missing.share(request));
+  assert.equal((await missing.share(request)).status, 'failed');
   assert.equal(missing.calls.sends.length, 0);
   const failedPhoto = fixture({ downloadPhoto: async () => { throw new Error('bad photo'); } });
-  await assert.doesNotReject(failedPhoto.share(request));
+  assert.equal((await failedPhoto.share(request)).status, 'failed');
   assert.equal(failedPhoto.calls.uploads.length, 0);
 });
 
-test('VCF sharing can be disabled without disabling native iMessage sharing', async () => {
+test('proactive introductions can be disabled without disabling explicit tool requests', async () => {
   const previous = process.env.RCS_CONTACT_CARD_ENABLED;
   process.env.RCS_CONTACT_CARD_ENABLED = 'false';
   try {
     const { share, calls } = fixture();
-    await share(request);
-    await share({ ...request, service: 'iMessage' });
-    assert.equal(calls.uploads.length, 0);
-    assert.deepEqual(calls.native, ['chat']);
+    assert.equal((await share(request)).status, 'skipped');
+    assert.equal((await share({ ...request, requestedByUser: true })).status, 'sent');
+    assert.equal(calls.sends.length, 2);
   } finally {
     if (previous === undefined) delete process.env.RCS_CONTACT_CARD_ENABLED;
     else process.env.RCS_CONTACT_CARD_ENABLED = previous;
@@ -116,13 +143,13 @@ test('upload uses signed headers and exact VCF bytes, then sends attachment_id w
   const bytes = createVCard(contact, detectContactPhoto(png));
   global.fetch = async (url, options) => {
     calls.push({ url, ...options });
-    if (calls.length === 1) return { ok: true, json: async () => ({ attachment_id: 'upload-id', upload_url: 'https://storage.example/upload', required_headers: { 'Content-Type': 'text/vcard', 'x-upload-test': 'signed' } }) };
+    if (calls.length === 1) return { ok: true, json: async () => ({ attachment_id: 'upload-id', upload_url: 'https://storage.example/upload', download_url: 'https://storage.example/contact.vcf', required_headers: { 'Content-Type': 'text/vcard', 'x-upload-test': 'signed' } }) };
     if (calls.length === 2) return { ok: true };
     return { ok: true, json: async () => ({ message: { id: 'message' } }) };
   };
   try {
-    const id = await uploadContactVCard(bytes);
-    await sendMessage('chat', '', undefined, undefined, [{ attachment_id: id }]);
+    const uploaded = await uploadContactVCard(bytes);
+    await sendMessage('chat', '', undefined, undefined, [{ attachment_id: uploaded.attachmentId }]);
     assert.deepEqual(JSON.parse(calls[0].body), { filename: 'contact.vcf', content_type: 'text/vcard', size_bytes: bytes.length });
     assert.deepEqual(calls[1].headers, { 'Content-Type': 'text/vcard', 'x-upload-test': 'signed' });
     assert.deepEqual(Buffer.from(calls[1].body), bytes);

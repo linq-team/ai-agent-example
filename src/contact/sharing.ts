@@ -1,4 +1,6 @@
-import { getContactCard, sendMessage, shareContactCard, uploadContactVCard } from '../linq/client.js';
+import { getContactCard, sendMessage, uploadContactVCard } from '../linq/client.js';
+import { randomUUID, createHash } from 'node:crypto';
+import { getContactShareStatus, claimContactShare, completeContactShare, releaseContactShare } from '../state/contact.js';
 import { createVCard, detectContactPhoto } from './vcard.js';
 
 const MAX_PHOTO_BYTES = 2 * 1024 * 1024;
@@ -25,13 +27,26 @@ async function downloadPhoto(url: string): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-// A factory keeps the sharing policy independently testable. Production uses
-// one instance below; no customer-specific contact data lives in this repo.
-export function createContactSharer(deps = { getContactCard, sendMessage, shareContactCard, uploadContactVCard, downloadPhoto }) {
-  const attachments = new Map<string, { expiresAt: number; value: Promise<string> }>();
-  const shared = new Map<string, Promise<void>>();
+export interface ShareContactRequest {
+  chatId: string;
+  botNumber?: string;
+  person: string;
+  incomingMessageId: string;
+  service?: 'iMessage' | 'RCS' | 'SMS';
+  isGroupChat: boolean;
+  requestedByUser: boolean;
+  message: string;
+}
 
-  async function attachmentFor(phone: string): Promise<string> {
+export type ShareContactResult = { status: 'sent' | 'skipped' | 'failed'; reason?: string };
+
+export function createContactSharer(deps = {
+  getContactCard, sendMessage, uploadContactVCard, downloadPhoto,
+  getContactShareStatus, claimContactShare, completeContactShare, releaseContactShare,
+}) {
+  const attachments = new Map<string, { expiresAt: number; value: ReturnType<typeof uploadContactVCard> }>();
+
+  async function attachmentFor(phone: string): ReturnType<typeof uploadContactVCard> {
     const cached = attachments.get(phone);
     if (cached && cached.expiresAt > Date.now()) return cached.value;
     const value = (async () => {
@@ -49,40 +64,54 @@ export function createContactSharer(deps = { getContactCard, sendMessage, shareC
     }
   }
 
-  return async ({ chatId, botNumber, service, shareNative }: {
-    chatId: string;
-    botNumber?: string;
-    service?: 'iMessage' | 'RCS' | 'SMS';
-    shareNative: boolean;
-  }): Promise<void> => {
+  return async (request: ShareContactRequest): Promise<ShareContactResult> => {
+    const { chatId, botNumber, person, incomingMessageId, service, requestedByUser, isGroupChat, message } = request;
+    if (!botNumber || !person || !incomingMessageId) return { status: 'failed', reason: 'Missing contact-sharing destination' };
+    if (!requestedByUser) {
+      if (service !== 'RCS' || isGroupChat || process.env.RCS_CONTACT_CARD_ENABLED === 'false') return { status: 'skipped' };
+      if (await deps.getContactShareStatus(botNumber, person) !== 'not_shared') return { status: 'skipped' };
+    }
+    const owner = randomUUID();
+    const requestId = `${chatId}:${incomingMessageId}`;
+    // Stable introduction keys also prevent duplicate sends if the process
+    // stops after Linq accepts the file but before DynamoDB records success.
+    const deliveryKey = createHash('sha256').update(JSON.stringify([
+      botNumber, person, requestedByUser ? requestId : 'introduction',
+    ])).digest('hex');
+    let claimed = false;
+    let accepted = false;
     try {
-      if (service === 'iMessage') {
-        if (shareNative) await deps.shareContactCard(chatId);
-        return;
+      claimed = await deps.claimContactShare(botNumber, person, requestId, owner, requestedByUser);
+      if (!claimed) return { status: 'skipped', reason: 'Already shared or another send is in progress' };
+      const attachment = await attachmentFor(botNumber);
+      if (service === 'SMS' && (!attachment.downloadUrl || new URL(attachment.downloadUrl).protocol !== 'https:')) {
+        throw new Error('No valid contact download link was returned');
       }
-      if (service !== 'RCS' || process.env.RCS_CONTACT_CARD_ENABLED === 'false') return;
-      if (!botNumber) throw new Error('Missing recipient_phone for RCS contact sharing');
-      const key = `${botNumber}:${chatId}`;
-      // Unlike native name/photo sharing, a VCF is a visible attachment. Send
-      // it once per chat per process, not every five messages. Concurrent
-      // incoming messages share the same in-flight send; failures can retry.
-      if (shared.has(key)) return await shared.get(key);
-      const send = (async () => {
-        const attachmentId = await attachmentFor(botNumber);
-        await deps.sendMessage(chatId, '', undefined, undefined, [{ attachment_id: attachmentId }]);
-        console.log(`[contact] Shared VCF with chat ${chatId}`);
-      })();
-      shared.set(key, send);
-      try { await send; }
-      catch (error) {
-        shared.delete(key);
-        throw error;
-      }
+      // The model supplies the natural introduction. Sending it here means a
+      // suppressed duplicate does not produce another "here is my contact".
+      await deps.sendMessage(chatId, message, undefined, undefined, undefined, undefined, `${deliveryKey}:intro`);
+      const sent = service === 'SMS'
+        ? await deps.sendMessage(chatId, attachment.downloadUrl, undefined, undefined, undefined, undefined, `${deliveryKey}:file`)
+        : await deps.sendMessage(chatId, '', undefined, undefined, [{ attachment_id: attachment.attachmentId }], undefined, `${deliveryKey}:file`);
+      if (sent.message.delivery_status === 'failed') throw new Error('Linq rejected contact delivery');
+      accepted = true;
+      await deps.completeContactShare(botNumber, person, requestId, owner, sent.message.service ?? service ?? 'unknown', sent.message.id);
+      console.log(`[contact] Tool shared VCF with chat ${chatId}`);
+      return { status: 'sent' };
     } catch (error) {
-      // Contact-sharing failures must never prevent the conversational reply.
-      console.error('[contact] Sharing failed (non-fatal):', error instanceof Error ? error.message : 'Unknown error');
+      console.error('[contact] Tool failed:', error instanceof Error ? error.message : 'Unknown error');
+      if (accepted) {
+        // Do not tell the user the send failed if only the history write failed.
+        // Keep the lease; the stable Linq idempotency key protects retries.
+        return { status: 'sent', reason: 'Share history could not be updated' };
+      }
+      if (claimed) {
+        try { await deps.releaseContactShare(botNumber, person, owner); }
+        catch { console.error('[contact] Could not release share lease; it will expire'); }
+      }
+      return { status: 'failed', reason: 'Contact could not be sent' };
     }
   };
 }
 
-export const shareBotContact = createContactSharer();
+export const sendBotContact = createContactSharer();

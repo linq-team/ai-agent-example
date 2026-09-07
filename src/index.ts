@@ -1,11 +1,12 @@
 import 'dotenv/config';
 import express from 'express';
 import { createWebhookHandler } from './webhook/handler.js';
-import { sendMessage, markAsRead, startTyping, sendReaction, getChat, renameGroupChat, setGroupChatIcon, removeParticipant } from './linq/client.js';
+import { sendMessage, markAsRead, startTyping, sendReaction, shareContactCard, getChat, renameGroupChat, setGroupChatIcon, removeParticipant } from './linq/client.js';
 import { chat, getGroupChatAction, getTextForEffect, generateImage, isSlashCommand, CLAUDE_MODEL } from './claude/client.js';
 import { getUserProfile, addMessage, consumeMessageQuota, consumeImageQuota, logUsageConfig } from './state/index.js';
 import { processResponse } from './text/decorations.js';
-import { shareBotContact } from './contact/sharing.js';
+import { sendBotContact } from './contact/sharing.js';
+import { getContactShareStatus } from './state/contact.js';
 
 // Track message count per chat for contact card sharing
 const chatMessageCount = new Map<string, number>();
@@ -38,8 +39,13 @@ app.post(
 
     // Mark as read, get chat info, and fetch user profile in parallel.
     // Typing starts later, after usage limits pass, so we don't look like we're thinking when we'll actually ignore.
-    const parallelTasks: Promise<unknown>[] = [markAsRead(chatId), getChat(chatId), getUserProfile(from)];
-    parallelTasks.push(shareBotContact({ chatId, botNumber: recipientPhone, service, shareNative: shouldShareContact }));
+    const parallelTasks: Promise<unknown>[] = [
+      service === 'SMS' ? Promise.resolve() : markAsRead(chatId).catch(() => console.error('[main] Read receipt failed (non-fatal)')),
+      getChat(chatId), getUserProfile(from),
+    ];
+    if (service === 'iMessage' && shouldShareContact) {
+      parallelTasks.push(shareContactCard(chatId).catch(() => console.error('[contact] Native sharing failed (non-fatal)')));
+    }
     const [, chatInfo, senderProfile] = await Promise.all(parallelTasks) as [void, Awaited<ReturnType<typeof getChat>>, Awaited<ReturnType<typeof getUserProfile>>];
     console.log(`[timing] markAsRead+getChat+getProfile+contact: ${Date.now() - start}ms`);
     if (senderProfile?.name) {
@@ -93,10 +99,11 @@ app.post(
       }
     }
 
-    await startTyping(chatId);
+    if (service !== 'SMS') await startTyping(chatId);
 
     // Get Claude's response (typing indicator shows while this runs)
-    const { text: responseText, reaction, effect, renameChat, rememberedUser, generatedImage, groupChatIcon, removeMember } = await chat(chatId, text, images, audio, {
+    const contactShareStatus = recipientPhone ? await getContactShareStatus(recipientPhone, from) : 'unknown';
+    const { text: responseText, reaction, effect, renameChat, rememberedUser, generatedImage, groupChatIcon, removeMember, contactCard } = await chat(chatId, text, images, audio, {
       isGroupChat,
       participantNames,
       chatName: chatInfo.display_name,
@@ -104,6 +111,7 @@ app.post(
       senderHandle: from,
       senderProfile,
       service,
+      contactShareStatus,
     });
     console.log(`[timing] claude: ${Date.now() - start}ms`);
     console.log(`[debug] responseText: ${responseText ? `"${responseText.substring(0, 50)}..."` : 'null'}, effect: ${effect ? JSON.stringify(effect) : 'null'}, renameChat: ${renameChat || 'null'}, generatedImage: ${generatedImage ? 'yes' : 'null'}, removeMember: ${removeMember || 'null'}`);
@@ -151,7 +159,7 @@ app.post(
       console.log(`[main] Claude saved user info without text response (no auto-ack)`);
     }
 
-    if (finalText || generatedImage || groupChatIcon) {
+    if (finalText || generatedImage || groupChatIcon || contactCard) {
       // Split into multiple messages, then process text decoration markup.
       // iMessage receives native text_decorations; SMS/RCS receive plain text.
       const isIMessage = service === 'iMessage' || service === undefined;
@@ -182,6 +190,24 @@ app.post(
         console.log(`[timing] sendMessage (${messages.length} text msg${messages.length !== 1 ? 's' : ''}): ${Date.now() - start}ms`);
       }
 
+      if (contactCard) {
+        const result = await sendBotContact({
+          chatId, botNumber: recipientPhone, person: from, incomingMessageId: messageId,
+          service, isGroupChat, ...contactCard,
+        });
+        if (result.status === 'sent') {
+          await addMessage(chatId, 'assistant', `[sent my VCF contact${service === 'SMS' ? ' download link' : ' file'} to ${from}]`);
+        } else if (result.status === 'failed') {
+          const failure = 'sorry, my contact file didn’t send—try asking me again in a bit';
+          await sendMessage(chatId, failure);
+          await addMessage(chatId, 'assistant', failure);
+        } else if (contactCard.requestedByUser) {
+          const pending = 'my contact was already sent for this request or is being sent now';
+          await sendMessage(chatId, pending);
+          await addMessage(chatId, 'assistant', pending);
+        }
+      }
+
       // Now generate and send image if requested
       if (generatedImage) {
         const imageQuota = await consumeImageQuota(from);
@@ -189,7 +215,7 @@ app.post(
           await sendMessage(chatId, imageQuota.message);
         } else {
           // Show typing indicator while generating (takes ~15 seconds)
-          await startTyping(chatId);
+          if (service !== 'SMS') await startTyping(chatId);
           console.log(`[main] Generating image after sending text...`);
           const imageUrl = await generateImage(generatedImage.prompt);
           if (imageUrl) {
@@ -214,7 +240,7 @@ app.post(
           await sendMessage(chatId, iconQuota.message);
         } else {
           // Show typing indicator while generating (takes ~15 seconds)
-          await startTyping(chatId);
+          if (service !== 'SMS') await startTyping(chatId);
           console.log(`[main] Generating group chat icon...`);
           const imageUrl = await generateImage(groupChatIcon.prompt);
           if (imageUrl) {

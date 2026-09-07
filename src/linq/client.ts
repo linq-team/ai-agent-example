@@ -85,12 +85,13 @@ export interface SendMessageResponse {
     sent_at: string;
     delivery_status: 'pending' | 'queued' | 'sent' | 'delivered' | 'failed';
     is_read: boolean;
+    service?: 'iMessage' | 'RCS' | 'SMS';
   };
 }
 
 export type MediaAttachment = { url: string; attachment_id?: never } | { attachment_id: string; url?: never };
 
-export async function sendMessage(chatId: string, text: string, effect?: MessageEffect, replyTo?: ReplyTo, media?: MediaAttachment[], textDecorations?: TextDecoration[]): Promise<SendMessageResponse> {
+export async function sendMessage(chatId: string, text: string, effect?: MessageEffect, replyTo?: ReplyTo, media?: MediaAttachment[], textDecorations?: TextDecoration[], idempotencyKey?: string): Promise<SendMessageResponse> {
   if (!API_TOKEN) {
     throw new Error('LINQ_API_TOKEN not configured');
   }
@@ -122,6 +123,7 @@ export async function sendMessage(chatId: string, text: string, effect?: Message
   }
 
   const message: Record<string, unknown> = { parts };
+  if (idempotencyKey) message.idempotency_key = idempotencyKey;
 
   if (effect) {
     message.effect = effect;
@@ -141,6 +143,7 @@ export async function sendMessage(chatId: string, text: string, effect?: Message
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!response.ok) {
@@ -284,7 +287,7 @@ export async function getContactCard(phoneNumber: string): Promise<ContactCard |
   return data.contact_cards.find(card => card.phone_number === phoneNumber && card.is_active);
 }
 
-export async function uploadContactVCard(contents: Buffer): Promise<string> {
+export async function uploadContactVCard(contents: Buffer): Promise<{ attachmentId: string; downloadUrl: string }> {
   if (!API_TOKEN) throw new Error('LINQ_API_TOKEN not configured');
   const response = await fetch(`${BASE_URL}/attachments`, {
     method: 'POST',
@@ -293,7 +296,7 @@ export async function uploadContactVCard(contents: Buffer): Promise<string> {
     signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) throw new Error(`Contact attachment creation failed: ${response.status}`);
-  const upload = await response.json() as { attachment_id: string; upload_url: string; required_headers: Record<string, string> };
+  const upload = await response.json() as { attachment_id: string; upload_url: string; download_url: string; required_headers: Record<string, string> };
   const uploaded = await fetch(upload.upload_url, {
     method: 'PUT',
     // Use the signed headers exactly; never forward the Linq bearer token.
@@ -302,7 +305,7 @@ export async function uploadContactVCard(contents: Buffer): Promise<string> {
     signal: AbortSignal.timeout(15_000),
   });
   if (!uploaded.ok) throw new Error(`Contact attachment upload failed: ${uploaded.status}`);
-  return upload.attachment_id;
+  return { attachmentId: upload.attachment_id, downloadUrl: upload.download_url };
 }
 
 export async function markAsRead(chatId: string): Promise<void> {

@@ -33,7 +33,7 @@ A demo app showcasing the [Linq v3 API](https://apidocs.linqapp.com). Connects C
 - **Multi-message responses** - Sends multiple short messages like a human would
 - **Message threading** - Continues conversation threads when users reply
 - **Platform awareness** - Knows if conversation is iMessage, RCS, or SMS
-- **Contact sharing** - Native name/photo sharing on iMessage; a saveable `.vcf` contact with an embedded photo on RCS
+- **Contact sharing** - Ask Claude for its VCF on iMessage/RCS or a download link on SMS; remembers prior shares and introduces itself naturally in new RCS conversations
 
 ## Quick Start
 
@@ -72,23 +72,25 @@ Environment variables in `.env`:
 | `ALLOWED_SENDERS` | If set, only respond to these senders (for local dev) |
 | `NODE_ENV` | Set to `production` to disable debug logging |
 | `DYNAMODB_TABLE_NAME` | DynamoDB table for conversation storage |
-| `RCS_CONTACT_CARD_ENABLED` | Send a `.vcf` contact attachment in RCS chats (default: enabled; set `false` to disable) |
+| `RCS_CONTACT_CARD_ENABLED` | Allow Claude to introduce its VCF proactively in RCS (default: enabled); explicit tool requests always remain available |
 
-### Contact sharing on iMessage and RCS
+### Contact sharing by tool call
 
-Configure an active [Linq contact card](https://docs.linqapp.com/channel/imessage/api/resources/contact_card/methods/create/) for each of your bot numbers, including its first name, last name, and a PNG, JPEG, or GIF photo (up to 2 MiB). The same profile supplies both sharing methods; forks do not need to hardcode this demo's name, number, or photo.
+Configure an active [Linq contact card](https://docs.linqapp.com/channel/imessage/api/resources/contact_card/methods/create/) for each bot number, with its first name, last name, and a PNG, JPEG, or GIF photo (up to 2 MiB). Forks use their own profile without hardcoding this demo's contact details. Photos are embedded in vCard 3.0 files rather than linked to an expiring image URL.
 
-- **iMessage:** uses Linq's native name/photo sharing on the first message and every fifth message, as before.
-- **RCS:** fetches the active contact profile for the webhook's `recipient_phone`, builds a vCard 3.0 file, uploads it as `text/vcard`, and sends it as a media attachment. The photo is embedded in the file so saving the contact does not depend on an expiring image URL. Recipients can open the attachment and save the contact; the preview and import experience depend on their iPhone or Android messaging/contact app.
-- **SMS or unknown service:** skips automatic contact sharing.
+Claude has a `send_contact_card` tool in every conversation. Users can ask “send me your contact,” “can I save your number?” or “resend your VCF.” The tool takes `requested_by_user` and a short natural `message`; the app supplies the destination from the incoming webhook, sends the model's introduction followed by the contact, and records the outcome in conversation history. Like the existing image-generation tool, it executes after Claude's normal text response. The tool is not called automatically by the webhook.
 
-A VCF is a visible message, so it is sent once per RCS chat per running process rather than every five messages. Concurrent requests share the same send. A restart can resend the contact; multiple instances would need a shared delivery record. Successful uploads are reused for one hour per bot number (shorter than Linq's documented ephemeral attachment retention). Newly shared cards pick up profile changes after that cache expires; existing chats are not automatically resent updated cards.
+- **iMessage and RCS:** explicit tool requests send a `.vcf` media attachment, including resends. Native iMessage name/photo sharing remains separate, on the first and every fifth message.
+- **SMS:** explicit tool requests send a download link because plain SMS cannot carry a VCF attachment. The link uses Linq's attachment storage and may expire after roughly 24–48 hours on the ephemeral tier; asking again generates or reuses a current upload.
+- **Early RCS introductions:** if the bot has not previously shared a VCF or link with this person, Claude is prompted to work the tool naturally into an early reply. It should defer for urgent/sensitive topics or if the user declines. Proactive sharing is disabled in group chats and on iMessage/SMS. Set `RCS_CONTACT_CARD_ENABLED=false` to disable proactive RCS introductions while keeping explicit requests available on every service.
 
-If a configured photo cannot be downloaded or decoded, sharing is skipped and retried on a later message rather than silently sending the wrong contact. A profile without a photo produces a name-and-number card. Contact lookup, upload, and send failures are logged and do not prevent the bot's normal reply.
+Sharing history is stored in DynamoDB under `CONTACTSHARE#<bot number>#USER#<sender handle>`. A successful API send is remembered across chats, process restarts, deployments, and `/clear`, independently of the one-hour conversation history. Records have no TTL. Native iMessage name/photo sharing does not count as a VCF share. Explicit requests may resend a previously shared card. In group chats the record tracks the person making the request.
 
-The sharing policy is in `src/contact/sharing.ts`, the vCard serializer is in `src/contact/vcard.ts`, and the Linq upload/media calls are in `src/linq/client.ts`. This feature does not force RCS delivery or change an iPhone's outgoing protocol; it chooses the contact-sharing format from the incoming webhook's `service`.
+A conditional two-minute lease prevents concurrent sends to the same person, and stable Linq idempotency keys protect retries after ambiguous network failures. History is recorded after Linq accepts the contact, which is not proof the recipient saved it or that carrier delivery completed. Lookup failures suppress proactive introductions. Failed uploads/sends stay retryable and produce a short failure message; they are not marked shared. A history-write failure after an accepted send is logged without telling the recipient the file failed.
 
-Run `npm test` for serialization, protocol selection, duplicate suppression, retry, and attachment request checks. For device validation, send the bot a message over RCS, open `contact.vcf`, and verify the name, number, and photo before saving. Test on both iPhone and Android; green bubbles alone do not distinguish RCS from SMS.
+Successful uploads are reused for one hour per bot number. Profile changes appear in subsequent uploads after the cache expires; previously shared contacts are not automatically resent. If a configured photo cannot be fetched or recognized, the send fails instead of silently dropping it. A profile without a photo produces a name-and-number card. Neither the tool nor its proactive prompt forces a messaging protocol.
+
+Implementation: `src/contact/tool.ts` defines the tool and context, `src/contact/sharing.ts` executes it, `src/contact/vcard.ts` serializes the file, and `src/state/contact.ts` stores share history. The app role needs DynamoDB `GetItem` and `UpdateItem` on the configured table. Run `npm test` for tool selection, serialization, persistent-policy behavior, retry/idempotency, and attachment requests. Test actual delivery/import on iPhone and Android separately.
 
 ## Commands
 
@@ -131,6 +133,7 @@ The Claude integration uses these tools:
 5. **generate_image** - Generates images via OpenAI DALL-E 3
 6. **set_group_chat_icon** - Generates and sets the group chat icon
 7. **web_search** - Searches the web for current information
+8. **send_contact_card** - Shares a saveable VCF or SMS download link, on request or as a natural first RCS introduction
 
 ### Message Effects
 

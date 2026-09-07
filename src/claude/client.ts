@@ -2,6 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import OpenAI from 'openai';
 import { getConversation, addMessage, clearConversation, getUserProfile, setUserName, addUserFact, clearUserProfile, UserProfile, StoredMessage } from '../state/conversation.js';
 import { USAGE_LIMITS } from '../state/usage.js';
+import { SEND_CONTACT_CARD_TOOL, parseContactCardRequest, contactSharingPrompt, ContactCardRequest } from '../contact/tool.js';
+import type { ContactShareStatus } from '../state/contact.js';
 
 export const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-haiku-4-5';
 
@@ -208,6 +210,7 @@ Rules:
     }
   }
 
+  prompt += contactSharingPrompt(chatContext?.contactShareStatus ?? 'unknown', chatContext?.service, chatContext?.isGroupChat);
   return prompt;
 }
 
@@ -360,6 +363,7 @@ export interface ChatResponse {
   generatedImage: { url: string; prompt: string } | null;
   groupChatIcon: { prompt: string } | null;
   removeMember: string | null;
+  contactCard: ContactCardRequest | null;
 }
 
 export interface ImageInput {
@@ -439,6 +443,7 @@ export interface ChatContext {
   senderHandle?: string;
   senderProfile?: UserProfile | null;
   service?: MessageService;
+  contactShareStatus?: ContactShareStatus;
 }
 
 /**
@@ -486,6 +491,7 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
     generatedImage: null,
     groupChatIcon: null,
     removeMember: null,
+    contactCard: null,
   };
 
   const cmd = userMessage.toLowerCase().trim();
@@ -588,7 +594,7 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
     const formattedHistory = formatHistoryForClaude(history, chatContext?.isGroupChat ?? false);
 
     // Build tools list - some tools only available in group chats
-    const tools: Anthropic.Tool[] = [REACTION_TOOL, EFFECT_TOOL, REMEMBER_USER_TOOL, GENERATE_IMAGE_TOOL, WEB_SEARCH_TOOL];
+    const tools: Anthropic.Tool[] = [REACTION_TOOL, EFFECT_TOOL, REMEMBER_USER_TOOL, GENERATE_IMAGE_TOOL, WEB_SEARCH_TOOL, SEND_CONTACT_CARD_TOOL];
     if (chatContext?.isGroupChat) {
       tools.push(RENAME_CHAT_TOOL, SET_GROUP_ICON_TOOL, REMOVE_MEMBER_TOOL);
     }
@@ -610,10 +616,14 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
     let generatedImage: { url: string; prompt: string } | null = null;
     let groupChatIcon: { prompt: string } | null = null;
     let removeMember: string | null = null;
+    let contactCard: ContactCardRequest | null = null;
 
     for (const block of response.content) {
       if (block.type === 'text') {
         textParts.push(block.text);
+      } else if (block.type === 'tool_use' && block.name === 'send_contact_card') {
+        contactCard = parseContactCardRequest(block.input);
+        console.log(`[claude] Contact-card tool requested (valid=${contactCard !== null})`);
       } else if (block.type === 'tool_use' && block.name === 'send_reaction') {
         const input = block.input as { type: ReactionType; emoji?: string };
         if (input.type === 'custom' && input.emoji) {
@@ -699,7 +709,7 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
       await addMessage(chatId, 'assistant', `[reacted with ${reactionDisplay}]`);
     }
 
-    return { text: textResponse, reaction, effect, renameChat, rememberedUser, generatedImage, groupChatIcon, removeMember };
+    return { text: textResponse, reaction, effect, renameChat, rememberedUser, generatedImage, groupChatIcon, removeMember, contactCard };
   } catch (error) {
     console.error('[claude] API error:', error);
     throw error;
@@ -771,6 +781,7 @@ IMPORTANT: BIAS TOWARD "respond" - text responses are almost always better than 
 Answer with ONE of these:
 - "respond" - Claude should send a text reply. USE THIS BY DEFAULT when:
   * They asked Claude anything
+  * They ask for Claude's contact, contact card, vCard, or VCF (including resends)
   * They mentioned Claude (or misspelled it - cluade, cloude, cladue, claud, etc.)
   * They mentioned "AI", "bot", "assistant", or "Sullivan"
   * They're talking to Claude or continuing a conversation
