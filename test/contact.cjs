@@ -47,14 +47,14 @@ function fixture(overrides = {}, records = new Map()) {
 const request = {
   chatId: 'chat', botNumber: contact.phone_number, person: '+14155550200',
   incomingMessageId: 'incoming', service: 'RCS', isGroupChat: false,
-  requestedByUser: false, message: 'btw here’s my contact if you wanna save me',
+  requestedByUser: false,
 };
 
 test('proactive RCS tool remembers a person across chats and process restarts, and deduplicates concurrent calls', async () => {
   const { share, calls, records } = fixture();
   const results = await Promise.all([share(request), share(request)]);
   assert.equal(results.filter(r => r.status === 'sent').length, 1);
-  assert.equal(calls.sends.length, 2); // intro, then file
+  assert.equal(calls.sends.length, 1); // tool sends only the file
   const restarted = fixture({}, records);
   assert.equal((await restarted.share({ ...request, chatId: 'new-chat', incomingMessageId: 'new-event' })).status, 'skipped');
   assert.equal(restarted.calls.uploads.length, 0);
@@ -71,12 +71,12 @@ test('explicit requests work on all services and can resend; repeated webhook ca
     assert.equal((await share(explicit)).status, 'sent');
     assert.equal((await share(explicit)).status, 'skipped');
     assert.equal((await share({ ...explicit, incomingMessageId: 'resend' })).status, 'sent');
-    assert.equal(calls.sends.length, 4);
+    assert.equal(calls.sends.length, 2);
     if (service === 'SMS') {
-      assert.equal(calls.sends[1][1], 'https://example.com/contact.vcf');
-      assert.equal(calls.sends[1][4], undefined);
-    } else assert.deepEqual(calls.sends[1][4], [{ attachment_id: 'attachment' }]);
-    assert.notEqual(calls.sends[1][6], calls.sends[3][6]);
+      assert.equal(calls.sends[0][1], 'https://example.com/contact.vcf');
+      assert.equal(calls.sends[0][4], undefined);
+    } else assert.deepEqual(calls.sends[0][4], [{ attachment_id: 'attachment' }]);
+    assert.notEqual(calls.sends[0][6], calls.sends[1][6]);
   }
 });
 
@@ -94,13 +94,13 @@ test('failed sends remain retryable with stable idempotency keys; failed sends a
   const keys = [];
   const { share, records } = fixture({ sendMessage: async (...args) => {
     keys.push(args[6]);
-    if (++attempts === 2) throw new Error('temporary failure');
+    if (++attempts === 1) throw new Error('temporary failure');
     return { message: { id: 'sent', delivery_status: 'queued' } };
   } });
   assert.equal((await share(request)).status, 'failed');
   assert.equal(records.get(request.botNumber + request.person).shared, undefined);
   assert.equal((await share(request)).status, 'sent');
-  assert.equal(keys[0], keys[2]); assert.equal(keys[1], keys[3]);
+  assert.equal(keys[0], keys[1]);
   const missing = fixture({ getContactCard: async () => undefined });
   assert.equal((await missing.share(request)).status, 'failed');
   assert.equal(missing.calls.sends.length, 0);
@@ -116,7 +116,7 @@ test('proactive introductions can be disabled without disabling explicit tool re
     const { share, calls } = fixture();
     assert.equal((await share(request)).status, 'skipped');
     assert.equal((await share({ ...request, requestedByUser: true })).status, 'sent');
-    assert.equal(calls.sends.length, 2);
+    assert.equal(calls.sends.length, 1);
   } finally {
     if (previous === undefined) delete process.env.RCS_CONTACT_CARD_ENABLED;
     else process.env.RCS_CONTACT_CARD_ENABLED = previous;

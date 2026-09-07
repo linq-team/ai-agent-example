@@ -35,7 +35,6 @@ export interface ShareContactRequest {
   service?: 'iMessage' | 'RCS' | 'SMS';
   isGroupChat: boolean;
   requestedByUser: boolean;
-  message: string;
 }
 
 export type ShareContactResult = { status: 'sent' | 'skipped' | 'failed'; reason?: string };
@@ -65,7 +64,7 @@ export function createContactSharer(deps = {
   }
 
   return async (request: ShareContactRequest): Promise<ShareContactResult> => {
-    const { chatId, botNumber, person, incomingMessageId, service, requestedByUser, isGroupChat, message } = request;
+    const { chatId, botNumber, person, incomingMessageId, service, requestedByUser, isGroupChat } = request;
     if (!botNumber || !person || !incomingMessageId) return { status: 'failed', reason: 'Missing contact-sharing destination' };
     if (!requestedByUser) {
       if (service !== 'RCS' || isGroupChat || process.env.RCS_CONTACT_CARD_ENABLED === 'false') return { status: 'skipped' };
@@ -87,9 +86,8 @@ export function createContactSharer(deps = {
       if (service === 'SMS' && (!attachment.downloadUrl || new URL(attachment.downloadUrl).protocol !== 'https:')) {
         throw new Error('No valid contact download link was returned');
       }
-      // The model supplies the natural introduction. Sending it here means a
-      // suppressed duplicate does not produce another "here is my contact".
-      await deps.sendMessage(chatId, message, undefined, undefined, undefined, undefined, `${deliveryKey}:intro`);
+      // Normal assistant text owns the introduction. The tool sends only the
+      // file/link, even if a model response contains a legacy "message" input.
       const sent = service === 'SMS'
         ? await deps.sendMessage(chatId, attachment.downloadUrl, undefined, undefined, undefined, undefined, `${deliveryKey}:file`)
         : await deps.sendMessage(chatId, '', undefined, undefined, [{ attachment_id: attachment.attachmentId }], undefined, `${deliveryKey}:file`);

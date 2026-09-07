@@ -34,7 +34,7 @@ test('Claude receives the tool on every service; a tool-only response reaches th
         isGroupChat: false, participantNames: [], chatName: null, service, contactShareStatus: 'shared',
       });
       assert.equal(result.text, null);
-      assert.deepEqual(result.contactCard, { requestedByUser: true, message: 'here’s my contact' });
+      assert.deepEqual(result.contactCard, { requestedByUser: true });
     }
   } finally {
     Anthropic.Messages.prototype.create = originalCreate;
