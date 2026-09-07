@@ -33,6 +33,7 @@ A demo app showcasing the [Linq v3 API](https://apidocs.linqapp.com). Connects C
 - **Multi-message responses** - Sends multiple short messages like a human would
 - **Message threading** - Continues conversation threads when users reply
 - **Platform awareness** - Knows if conversation is iMessage, RCS, or SMS
+- **Contact sharing** - Native name/photo sharing on iMessage; a saveable `.vcf` contact with an embedded photo on RCS
 
 ## Quick Start
 
@@ -71,6 +72,23 @@ Environment variables in `.env`:
 | `ALLOWED_SENDERS` | If set, only respond to these senders (for local dev) |
 | `NODE_ENV` | Set to `production` to disable debug logging |
 | `DYNAMODB_TABLE_NAME` | DynamoDB table for conversation storage |
+| `RCS_CONTACT_CARD_ENABLED` | Send a `.vcf` contact attachment in RCS chats (default: enabled; set `false` to disable) |
+
+### Contact sharing on iMessage and RCS
+
+Configure an active [Linq contact card](https://docs.linqapp.com/channel/imessage/api/resources/contact_card/methods/create/) for each of your bot numbers, including its first name, last name, and a PNG, JPEG, or GIF photo (up to 2 MiB). The same profile supplies both sharing methods; forks do not need to hardcode this demo's name, number, or photo.
+
+- **iMessage:** uses Linq's native name/photo sharing on the first message and every fifth message, as before.
+- **RCS:** fetches the active contact profile for the webhook's `recipient_phone`, builds a vCard 3.0 file, uploads it as `text/vcard`, and sends it as a media attachment. The photo is embedded in the file so saving the contact does not depend on an expiring image URL. Recipients can open the attachment and save the contact; the preview and import experience depend on their iPhone or Android messaging/contact app.
+- **SMS or unknown service:** skips automatic contact sharing.
+
+A VCF is a visible message, so it is sent once per RCS chat per running process rather than every five messages. Concurrent requests share the same send. A restart can resend the contact; multiple instances would need a shared delivery record. Successful uploads are reused for one hour per bot number (shorter than Linq's documented ephemeral attachment retention). Newly shared cards pick up profile changes after that cache expires; existing chats are not automatically resent updated cards.
+
+If a configured photo cannot be downloaded or decoded, sharing is skipped and retried on a later message rather than silently sending the wrong contact. A profile without a photo produces a name-and-number card. Contact lookup, upload, and send failures are logged and do not prevent the bot's normal reply.
+
+The sharing policy is in `src/contact/sharing.ts`, the vCard serializer is in `src/contact/vcard.ts`, and the Linq upload/media calls are in `src/linq/client.ts`. This feature does not force RCS delivery or change an iPhone's outgoing protocol; it chooses the contact-sharing format from the incoming webhook's `service`.
+
+Run `npm test` for serialization, protocol selection, duplicate suppression, retry, and attachment request checks. For device validation, send the bot a message over RCS, open `contact.vcf`, and verify the name, number, and photo before saving. Test on both iPhone and Android; green bubbles alone do not distinguish RCS from SMS.
 
 ## Commands
 
@@ -89,6 +107,8 @@ Users can send these commands via iMessage:
 | `DELETE /v3/chats/{chatId}/typing` | Stop typing indicator |
 | `POST /v3/messages/{messageId}/reactions` | Add reaction to message |
 | `POST /v3/chats/{chatId}/share_contact_card` | Share contact card |
+| `GET /v3/contact_card?phone_number=...` | Read the bot's configured contact name and photo |
+| `POST /v3/attachments` | Obtain a signed upload URL for the RCS `.vcf` attachment |
 | `GET /v3/chats/{chatId}` | Get chat info (for group detection) |
 | `PUT /v3/chats/{chatId}` | Update chat (rename group, set icon) |
 

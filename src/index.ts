@@ -1,10 +1,11 @@
 import 'dotenv/config';
 import express from 'express';
 import { createWebhookHandler } from './webhook/handler.js';
-import { sendMessage, markAsRead, startTyping, sendReaction, shareContactCard, getChat, renameGroupChat, setGroupChatIcon, removeParticipant } from './linq/client.js';
+import { sendMessage, markAsRead, startTyping, sendReaction, getChat, renameGroupChat, setGroupChatIcon, removeParticipant } from './linq/client.js';
 import { chat, getGroupChatAction, getTextForEffect, generateImage, isSlashCommand, CLAUDE_MODEL } from './claude/client.js';
 import { getUserProfile, addMessage, consumeMessageQuota, consumeImageQuota, logUsageConfig } from './state/index.js';
 import { processResponse } from './text/decorations.js';
+import { shareBotContact } from './contact/sharing.js';
 
 // Track message count per chat for contact card sharing
 const chatMessageCount = new Map<string, number>();
@@ -24,7 +25,7 @@ app.get('/health', (_req, res) => {
 // Webhook endpoint for Linq
 app.post(
   '/webhook',
-  createWebhookHandler(async (chatId, from, text, messageId, images, audio, incomingEffect, incomingReplyTo, service) => {
+  createWebhookHandler(async (chatId, from, text, messageId, images, audio, incomingEffect, incomingReplyTo, service, recipientPhone) => {
     const start = Date.now();
     console.log(`[main] Processing message from ${from}`);
 
@@ -38,12 +39,9 @@ app.post(
     // Mark as read, get chat info, and fetch user profile in parallel.
     // Typing starts later, after usage limits pass, so we don't look like we're thinking when we'll actually ignore.
     const parallelTasks: Promise<unknown>[] = [markAsRead(chatId), getChat(chatId), getUserProfile(from)];
-    if (shouldShareContact) {
-      console.log(`[main] Sharing contact card (message #${count})`);
-      parallelTasks.push(shareContactCard(chatId));
-    }
+    parallelTasks.push(shareBotContact({ chatId, botNumber: recipientPhone, service, shareNative: shouldShareContact }));
     const [, chatInfo, senderProfile] = await Promise.all(parallelTasks) as [void, Awaited<ReturnType<typeof getChat>>, Awaited<ReturnType<typeof getUserProfile>>];
-    console.log(`[timing] markAsRead+getChat+getProfile${shouldShareContact ? '+shareContact' : ''}: ${Date.now() - start}ms`);
+    console.log(`[timing] markAsRead+getChat+getProfile+contact: ${Date.now() - start}ms`);
     if (senderProfile?.name) {
       console.log(`[main] Known user: ${senderProfile.name} (${senderProfile.facts.length} facts)`);
     }

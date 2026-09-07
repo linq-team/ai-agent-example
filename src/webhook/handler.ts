@@ -13,7 +13,7 @@ import {
 export type MessageService = 'iMessage' | 'SMS' | 'RCS';
 
 export interface MessageHandler {
-  (chatId: string, from: string, text: string, messageId: string, images: ExtractedMedia[], audio: ExtractedMedia[], incomingEffect?: MessageEffect, incomingReplyTo?: ReplyTo, service?: MessageService): Promise<void>;
+  (chatId: string, from: string, text: string, messageId: string, images: ExtractedMedia[], audio: ExtractedMedia[], incomingEffect?: MessageEffect, incomingReplyTo?: ReplyTo, service?: MessageService, recipientPhone?: string): Promise<void>;
 }
 
 export function createWebhookHandler(onMessage: MessageHandler) {
@@ -87,7 +87,7 @@ export function createWebhookHandler(onMessage: MessageHandler) {
       console.log(`[webhook] Message from ${from}: "${text.substring(0, 50)}..."${mediaInfo ? ` [${mediaInfo}]` : ''}${effectInfo}${replyInfo}`);
 
       try {
-        await onMessage(chat_id, from, text, message.id, images, audio, incomingEffect, incomingReplyTo, service);
+        await onMessage(chat_id, from, text, message.id, images, audio, incomingEffect, incomingReplyTo, service, recipient_phone);
       } catch (error) {
         console.error(`[webhook] Error handling message:`, error);
       }
