@@ -2,7 +2,7 @@
 
 ![Demo Screenshot](demo.png)
 
-**Try it yourself!** Text **[+1 (415) 870-7772](sms:+14158707772)** to chat with Claude Sullivan, our AI agent running on the Linq API.
+**Try it yourself!** Text **[+1 (415) 870-7772](sms:+14158707772)** to chat with Linq Sullivan, our AI agent running on the Linq API.
 
 ---
 
@@ -33,6 +33,7 @@ A demo app showcasing the [Linq v3 API](https://apidocs.linqapp.com). Connects C
 - **Multi-message responses** - Sends multiple short messages like a human would
 - **Message threading** - Continues conversation threads when users reply
 - **Platform awareness** - Knows if conversation is iMessage, RCS, or SMS
+- **Configurable persona** - Set the agent's name, personality and group chat wake words without changing code
 - **Contact sharing** - Ask Claude for its VCF on iMessage/RCS or a download link on SMS; remembers prior shares and introduces itself naturally in new RCS conversations
 
 ## Quick Start
@@ -73,6 +74,38 @@ Environment variables in `.env`:
 | `NODE_ENV` | Set to `production` to disable debug logging |
 | `DYNAMODB_TABLE_NAME` | DynamoDB table for conversation storage |
 | `RCS_CONTACT_CARD_ENABLED` | Allow Claude to introduce its VCF proactively in RCS (default: enabled); explicit tool requests always remain available |
+| `AGENT_NAME` | The agent's name (default: `Claude`), used in the default persona and for group chat wake words |
+| `AGENT_PERSONA` | Persona text that replaces the built-in default (see [Bring your own persona](#bring-your-own-persona)) |
+| `AGENT_PERSONA_FILE` | Path to a file holding the persona text. Set this or `AGENT_PERSONA`, not both |
+| `AGENT_WAKE_WORDS` | Extra comma-separated words that make the agent answer in group chats |
+
+### Bring your own persona
+
+The system prompt has two parts:
+
+- **Persona:** who the agent is, what it says about itself and Linq, and how it writes. The built-in default in `src/persona.ts` is a casual texter, powered by Claude, that points people to Linq's website, sandbox and this repo.
+- **Mechanics:** always included, from `src/claude/client.ts`. They cover the demo's capabilities, commands, the limited-demo note, reaction and effect rules, and the context added to each message (who is texting, group chat, platform, text decorations, contact sharing).
+
+To change the persona, set `AGENT_NAME` and put your persona in `AGENT_PERSONA` (inline text) or in a file named by `AGENT_PERSONA_FILE`. Your text replaces the default persona completely, so cover identity, tone and length. Each reply is split into separate messages wherever the model writes `---`, so say how you want that used.
+
+```bash
+AGENT_NAME=Ada
+AGENT_PERSONA_FILE=./persona.md
+# Optional
+AGENT_WAKE_WORDS=ada bot,hey ada
+```
+
+The app checks these settings at startup. It refuses to start if both `AGENT_PERSONA` and `AGENT_PERSONA_FILE` are set, if either one is empty, or if the file can't be read. To use a default, leave its variable unset rather than blank. A relative `AGENT_PERSONA_FILE` is read from the directory the app starts in.
+
+With Docker, mount the persona file into the container (`.dockerignore` keeps `*.md` files out of the image):
+
+```bash
+docker run -p 3000:3000 --env-file .env \
+  -v "$PWD/persona.md:/app/persona.md:ro" -e AGENT_PERSONA_FILE=/app/persona.md \
+  linq-ai-agent
+```
+
+The demo number at the top of this page runs as Linq Sullivan with its own persona. Out of the box, this code runs as Claude.
 
 ### Contact sharing by tool call
 
@@ -183,21 +216,25 @@ In group chats, Claude doesn't respond to every message. A fast Haiku call deter
 3. **ignore** - Do nothing
 
 **Will respond:**
-- Direct mentions: "claude", "@claude", "hey Claude"
-- AI references: "hey AI", "ask the bot"
+- Direct mentions of the agent's name: each word of `AGENT_NAME` with 3 or more letters, so "claude", "@claude" or "hey Claude" by default. Typos such as "cluade" count when the name contains Claude.
+- Any word in `AGENT_WAKE_WORDS`
+- AI references: "hey AI", "ask the bot", "assistant"
+
+"link" never counts, so "send me the link" doesn't wake an agent named Linq.
 
 **Will react (but not respond):**
 - Positive feedback: "awesome", "haha", "thanks!"
 
 **Will ignore:**
 - Casual human-to-human banter
-- Messages addressed to specific people who aren't Claude
+- Messages addressed to specific people who aren't the agent
 
 ## File Structure
 
 ```
 src/
 ├── index.ts              # Express app, webhook handler, main flow
+├── persona.ts            # Agent name, default persona, group chat wake words
 ├── claude/
 │   └── client.ts         # Claude API integration, tools, system prompt
 ├── linq/
