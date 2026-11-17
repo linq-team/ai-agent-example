@@ -95,7 +95,7 @@ AGENT_PERSONA_FILE=./persona.md
 AGENT_WAKE_WORDS=ada bot,hey ada
 ```
 
-The app checks these settings at startup. It refuses to start if both `AGENT_PERSONA` and `AGENT_PERSONA_FILE` are set, if either one is empty, or if the file can't be read. To use a default, leave its variable unset rather than blank. A relative `AGENT_PERSONA_FILE` is read from the directory the app starts in.
+The app checks these settings at startup. It refuses to start if both `AGENT_PERSONA` and `AGENT_PERSONA_FILE` are set, if either one is empty, or if the file can't be read. To use a default, leave its variable unset rather than blank. A relative `AGENT_PERSONA_FILE` is read from the directory the app starts in. The startup log shows where the persona came from and its length in characters and lines, never its text, so you can check it arrived whole. It also warns when a custom persona is set without `AGENT_NAME`, or when the persona's line breaks look escaped.
 
 With Docker, mount the persona file into the container (`.dockerignore` keeps `*.md` files out of the image):
 

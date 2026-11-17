@@ -7,7 +7,7 @@ import { getUserProfile, addMessage, consumeMessageQuota, consumeImageQuota, log
 import { processResponse } from './text/decorations.js';
 import { sendBotContact } from './contact/sharing.js';
 import { getContactShareStatus } from './state/contact.js';
-import { getPersona } from './persona.js';
+import { getPersona, personaSummary } from './persona.js';
 
 // Track message count per chat for contact card sharing
 const chatMessageCount = new Map<string, number>();
@@ -19,7 +19,8 @@ const PORT = process.env.PORT || 3000;
 // Check the persona settings now rather than on the first message
 try {
   const persona = getPersona();
-  console.log(`[persona] ${persona.name}, persona from ${persona.source}, group chat wake words: ${persona.wakeWords.join(', ')}`);
+  console.log(`[persona] ${personaSummary(persona)}`);
+  for (const warning of persona.warnings) console.warn(`[persona] Warning: ${warning}`);
 } catch (error) {
   console.error(`[persona] ${(error as Error).message}`);
   process.exit(1);

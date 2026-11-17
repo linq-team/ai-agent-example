@@ -12,8 +12,8 @@ process.env.AGENT_PERSONA = 'You are Ada, a test persona.';
 delete process.env.AGENT_PERSONA_FILE;
 const Anthropic = require('@anthropic-ai/sdk');
 const conversation = require('../dist/state/conversation.js');
-const { loadPersona, defaultPersona } = require('../dist/persona.js');
-const { chat, buildSystemPrompt, helpText } = require('../dist/claude/client.js');
+const { loadPersona, defaultPersona, personaSummary } = require('../dist/persona.js');
+const { chat, buildSystemPrompt, helpText, getGroupChatAction } = require('../dist/claude/client.js');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'persona-'));
 after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
@@ -63,17 +63,47 @@ test('unusable persona settings are clear errors', () => {
   assert.throws(() => loadPersona({ AGENT_PERSONA_FILE: missing }), err => err.message.startsWith(`AGENT_PERSONA_FILE could not be read (${missing}): ENOENT`));
   assert.throws(() => loadPersona({ AGENT_PERSONA_FILE: path.dirname(file) }), /AGENT_PERSONA_FILE could not be read/);
   assert.throws(() => loadPersona({ AGENT_NAME: '  ' }), /AGENT_NAME is set but empty/);
+  // A blank variable is named, rather than reported as "both set"
+  assert.throws(() => loadPersona({ AGENT_PERSONA: 'You are Ada.', AGENT_PERSONA_FILE: '' }), /AGENT_PERSONA_FILE is set but empty/);
+  assert.throws(() => loadPersona({ AGENT_PERSONA: '', AGENT_PERSONA_FILE: file }), /AGENT_PERSONA is set but empty/);
 });
 
-test('the app refuses to start with a bad persona setting', () => {
-  const run = spawnSync(process.execPath, ['-e', "require('./dist/index.js')"], {
+test('settings that work but are probably mistakes produce warnings', () => {
+  assert.deepEqual(loadPersona({}).warnings, []);
+  assert.deepEqual(loadPersona({ AGENT_NAME: 'Ada' }).warnings, []);
+  assert.deepEqual(loadPersona({ AGENT_NAME: 'Ada', AGENT_PERSONA_FILE: tempFile('You are Ada.\n\nKeep it short.') }).warnings, []);
+  const unnamed = loadPersona({ AGENT_PERSONA: 'You are Ada.' }).warnings;
+  assert.equal(unnamed.length, 1);
+  assert.match(unnamed[0], /^AGENT_NAME is not set, so group chats still treat this agent as "Claude"/);
+  const escaped = loadPersona({ AGENT_NAME: 'Ada', AGENT_PERSONA: 'You are Ada.\\n\\nKeep it short.' }).warnings;
+  assert.equal(escaped.length, 1);
+  assert.match(escaped[0], /no line breaks but contains "\\n"/);
+});
+
+test('the startup summary gives the persona size but never its text', () => {
+  const persona = loadPersona({ AGENT_NAME: 'Ada', AGENT_PERSONA_FILE: tempFile('You are Ada.\n\nKeep it short.\n') });
+  const summary = personaSummary(persona);
+  assert.equal(summary, `Ada, persona from ${persona.source} (28 characters, 3 lines), group chat wake words: ada, ai, bot, assistant`);
+  assert.equal(summary.includes('Keep it short'), false);
+});
+
+function startApp(env) {
+  return spawnSync(process.execPath, ['-e', "require('./dist/index.js')"], {
     cwd: path.join(__dirname, '..'),
-    env: { ...process.env, DOTENV_CONFIG_PATH: '/dev/null', AGENT_PERSONA: 'x', AGENT_PERSONA_FILE: 'persona.md' },
+    env: { ...process.env, DOTENV_CONFIG_PATH: '/dev/null', ...env },
     encoding: 'utf8',
     timeout: 20000,
   });
-  assert.equal(run.status, 1);
-  assert.match(run.stderr, /\[persona\] Set AGENT_PERSONA or AGENT_PERSONA_FILE, not both\./);
+}
+
+test('the app refuses to start with a bad persona setting', () => {
+  const both = startApp({ AGENT_PERSONA: 'x', AGENT_PERSONA_FILE: 'persona.md' });
+  assert.equal(both.status, 1);
+  assert.match(both.stderr, /\[persona\] Set AGENT_PERSONA or AGENT_PERSONA_FILE, not both\./);
+  const missing = path.join(tempDir, 'missing.md');
+  const unreadable = startApp({ AGENT_PERSONA: undefined, AGENT_PERSONA_FILE: missing });
+  assert.equal(unreadable.status, 1);
+  assert.ok(unreadable.stderr.includes(`[persona] AGENT_PERSONA_FILE could not be read (${missing})`));
 });
 
 test('system prompt is the chosen persona followed by the mechanics', () => {
@@ -117,6 +147,28 @@ test('chat() sends the persona from the environment', async () => {
     Anthropic.Messages.prototype.create = originalCreate;
     conversation.getConversation = originalGet;
     conversation.addMessage = originalAdd;
+  }
+});
+
+test('the group chat classifier uses the persona from the environment', async () => {
+  const originalCreate = Anthropic.Messages.prototype.create;
+  const originalGet = conversation.getConversation;
+  let request;
+  conversation.getConversation = async () => [{ role: 'assistant', content: 'Hi! What can I help with?' }];
+  Anthropic.Messages.prototype.create = async options => {
+    request = options;
+    return { content: [{ type: 'text', text: 'respond' }] };
+  };
+  try {
+    // index.ts passes no persona, so this is the path the app takes
+    assert.equal((await getGroupChatAction('hey ada', '+14155550200', 'chat')).action, 'respond');
+    assert.match(request.system, /^You classify how an AI assistant "Ada" should handle/);
+    assert.ok(request.system.includes('"ada", "ai", "bot", "assistant"'));
+    assert.ok(request.messages[0].content.includes('\nAda: Hi! What can I help with?\n'));
+    assert.ok(request.messages[0].content.endsWith('How should Ada handle this?'));
+  } finally {
+    Anthropic.Messages.prototype.create = originalCreate;
+    conversation.getConversation = originalGet;
   }
 });
 

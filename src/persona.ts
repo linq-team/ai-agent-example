@@ -20,6 +20,8 @@ export interface Persona {
   source: string;
   // Lowercase words that make the agent answer in a group chat
   wakeWords: string[];
+  // Settings that work but are probably not what was meant, for the startup log
+  warnings: string[];
 }
 
 export function defaultPersona(name: string): string {
@@ -100,8 +102,15 @@ export function loadPersona(env: NodeJS.ProcessEnv = process.env): Persona {
     if (!name) throw new Error(`AGENT_NAME is set but empty. Remove it to use the default name (${DEFAULT_AGENT_NAME}).`);
   }
 
+  // Blank values are reported before the both-set check, so the message names the blank one
   const inline = env.AGENT_PERSONA;
   const file = env.AGENT_PERSONA_FILE;
+  if (inline !== undefined && !inline.trim()) {
+    throw new Error('AGENT_PERSONA is set but empty. Remove it to use the default persona.');
+  }
+  if (file !== undefined && !file.trim()) {
+    throw new Error('AGENT_PERSONA_FILE is set but empty. Set it to a file path, or remove it to use the default persona.');
+  }
   if (inline !== undefined && file !== undefined) {
     throw new Error('Set AGENT_PERSONA or AGENT_PERSONA_FILE, not both.');
   }
@@ -111,9 +120,7 @@ export function loadPersona(env: NodeJS.ProcessEnv = process.env): Persona {
   if (inline !== undefined) {
     text = inline.trim();
     source = 'AGENT_PERSONA';
-    if (!text) throw new Error('AGENT_PERSONA is set but empty. Remove it to use the default persona.');
   } else if (file !== undefined) {
-    if (!file.trim()) throw new Error('AGENT_PERSONA_FILE is set but empty. Set it to a file path, or remove it to use the default persona.');
     try {
       text = readFileSync(file, 'utf8').trim();
     } catch (error) {
@@ -123,7 +130,22 @@ export function loadPersona(env: NodeJS.ProcessEnv = process.env): Persona {
     if (!text) throw new Error(`AGENT_PERSONA_FILE is empty (${file}).`);
   }
 
-  return { name, text, source, wakeWords: wakeWords(name, env.AGENT_WAKE_WORDS) };
+  const words = wakeWords(name, env.AGENT_WAKE_WORDS);
+  const warnings: string[] = [];
+  if (source !== 'default' && env.AGENT_NAME === undefined) {
+    warnings.push(`AGENT_NAME is not set, so group chats still treat this agent as "${DEFAULT_AGENT_NAME}" (wake words: ${words.join(', ')}). Set AGENT_NAME to the name your persona uses.`);
+  }
+  if (!text.includes('\n') && text.includes('\\n')) {
+    warnings.push('The persona has no line breaks but contains "\\n". If its line breaks were escaped on the way in, the model sees them as text.');
+  }
+
+  return { name, text, source, wakeWords: words, warnings };
+}
+
+/** One line for the startup log: the name, where the persona came from, its size and the wake words. Never the text itself. */
+export function personaSummary(persona: Persona): string {
+  const lines = persona.text.split('\n').length;
+  return `${persona.name}, persona from ${persona.source} (${persona.text.length} characters, ${lines} lines), group chat wake words: ${persona.wakeWords.join(', ')}`;
 }
 
 let persona: Persona | undefined;
