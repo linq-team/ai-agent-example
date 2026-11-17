@@ -11,3 +11,7 @@ CLAUDE.md
 
 # OpenAPI spec (get latest from https://apidocs.linqapp.com)
 linqV3api.yaml
+
+# Local persona files hold your own prompt (see "Bring your own persona" in the README)
+persona.md
+*-persona.md

@@ -90,20 +90,24 @@ To change the persona, set `AGENT_NAME` and put your persona in `AGENT_PERSONA` 
 
 ```bash
 AGENT_NAME=Ada
-AGENT_PERSONA_FILE=./persona.md
+AGENT_PERSONA_FILE=/path/to/ada-persona.md
 # Optional
 AGENT_WAKE_WORDS=ada bot,hey ada
 ```
 
+Keep a private persona file outside your clone, so it can't be committed by accident. As a backstop, files named `persona.md` or ending in `-persona.md` are git-ignored.
+
 The app checks these settings at startup. It refuses to start if both `AGENT_PERSONA` and `AGENT_PERSONA_FILE` are set, if either one is empty, or if the file can't be read. To use a default, leave its variable unset rather than blank. A relative `AGENT_PERSONA_FILE` is read from the directory the app starts in. The startup log shows where the persona came from and its length in characters and lines, never its text, so you can check it arrived whole. It also warns when a custom persona is set without `AGENT_NAME`, or when the persona's line breaks look escaped.
 
-With Docker, mount the persona file into the container (`.dockerignore` keeps `*.md` files out of the image):
+The Docker image holds only the built `dist/`, so mount the persona file into the container:
 
 ```bash
 docker run -p 3000:3000 --env-file .env \
-  -v "$PWD/persona.md:/app/persona.md:ro" -e AGENT_PERSONA_FILE=/app/persona.md \
+  -v /path/to/ada-persona.md:/app/persona.md:ro -e AGENT_PERSONA_FILE=/app/persona.md \
   linq-ai-agent
 ```
+
+On a host that can't mount files, put the text in `AGENT_PERSONA` instead, from a secret or setting that keeps its line breaks.
 
 The demo number at the top of this page runs as Linq Sullivan with its own persona. Out of the box, this code runs as Claude.
 
@@ -216,11 +220,11 @@ In group chats, Claude doesn't respond to every message. A fast Haiku call deter
 3. **ignore** - Do nothing
 
 **Will respond:**
-- Direct mentions of the agent's name: each word of `AGENT_NAME` with 3 or more letters, so "claude", "@claude" or "hey Claude" by default. Typos such as "cluade" count when the name contains Claude.
+- Direct mentions of the agent's name: each word of `AGENT_NAME` with 3 or more letters, so "claude", "@claude" or "hey Claude" by default. Typos such as "cluade" count when the name contains Claude. Choose a name whose words people won't use by accident: an agent named "The Helper" would wake on every "the".
 - Any word in `AGENT_WAKE_WORDS`
 - AI references: "hey AI", "ask the bot", "assistant"
 
-"link" never counts, so "send me the link" doesn't wake an agent named Linq.
+"link" is never a wake word, and when "linq" is one, the classifier is told that "send me the link" is not a mention. The classifier is a model, so this steers it rather than guaranteeing it.
 
 **Will react (but not respond):**
 - Positive feedback: "awesome", "haha", "thanks!"
