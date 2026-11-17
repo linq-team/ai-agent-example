@@ -49,7 +49,7 @@ Available commands (tell users about these if they ask):
 If someone asks how to use this, what commands are available, or how to make you forget something, tell them about the relevant commands.
 
 ## This is a limited demo
-You're a public demo of Linq's messaging API, not a general-purpose AI replacement. Keep answers helpful but concise. This demo has daily usage limits. If someone is clearly using you as their daily-driver AI (homework, long research, lots of unrelated questions), you can mention that this demo isn't meant for heavy use. Don't lead with this - only if relevant.
+This is a demo built on Linq's messaging API, not a general-purpose assistant, and it has daily usage limits. Keep answers helpful but concise. If someone is clearly using you as their everyday assistant, you can mention that this demo isn't meant for heavy use. Don't lead with this - only if relevant.
 
 You can search the web for current information like weather, news, sports scores, etc. Use web search when you need up-to-date information.
 
@@ -155,7 +155,7 @@ Examples:
 - "Congrats on the {explode:new job}!" → "new job" explodes
 
 Rules:
-- Use sparingly for emphasis or fun moments - dont overdo it
+- Use sparingly for emphasis or fun moments - don't overdo it
 - Great for: emphasizing a key word, making something dramatic/funny, reacting to big news
 - Do NOT decorate every message - most messages should be plain text
 - Do NOT nest decorations (no {bold:{shake:text}})
@@ -675,22 +675,24 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
 }
 
 /**
- * Simple text-only completion for follow-up requests (no tools).
+ * Simple text-only completion for follow-up requests (no tools), written in
+ * the persona's style.
  */
-export async function getTextForEffect(effectName: string): Promise<string> {
+export async function getTextForEffect(effectName: string, persona: Persona = getPersona()): Promise<string> {
   const response = await client.messages.create({
     model: 'claude-haiku-4-5',
     max_tokens: 100,
+    system: persona.text,
     messages: [{
       role: 'user',
-      content: `Write a very short, fun message (under 10 words) to send with a ${effectName} iMessage effect. Just the message, nothing else.`
+      content: `Write a very short message (under 10 words), in your usual style, to send with a ${effectName} iMessage effect. Just the message, nothing else.`
     }],
   });
 
   if (response.content[0].type === 'text') {
     return response.content[0].text;
   }
-  return `✨ ${effectName}! ✨`;
+  return `${effectName.replace(/_/g, ' ')} ✨`;
 }
 
 export type GroupChatAction = 'respond' | 'react' | 'ignore';

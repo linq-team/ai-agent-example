@@ -163,17 +163,17 @@ function checkRateLimit(handle: string): { allowed: boolean; notify: boolean } {
   return { allowed: true, notify: false };
 }
 
-const USER_MESSAGE_LIMIT_TEXT =
+export const USER_MESSAGE_LIMIT_TEXT =
   "You've reached today's message limit for this demo. Try again tomorrow.";
-const CHAT_MESSAGE_LIMIT_TEXT =
+export const CHAT_MESSAGE_LIMIT_TEXT =
   "This chat has reached today's message limit for this demo. It resets tomorrow.";
-const GLOBAL_MESSAGE_LIMIT_TEXT =
+export const GLOBAL_MESSAGE_LIMIT_TEXT =
   "This demo is at capacity for today. Please check back tomorrow.";
-const RATE_LIMIT_TEXT =
+export const RATE_LIMIT_TEXT =
   "That's a lot of messages at once. This demo needs a short break, so try again in a few minutes.";
-const USER_IMAGE_LIMIT_TEXT =
+export const USER_IMAGE_LIMIT_TEXT =
   "You've reached today's image limit for this demo. Try again tomorrow.";
-const GLOBAL_IMAGE_LIMIT_TEXT =
+export const GLOBAL_IMAGE_LIMIT_TEXT =
   "This demo has reached its image limit for today. Try again tomorrow.";
 
 export async function consumeMessageQuota(handle: string, chatId: string): Promise<QuotaResult> {

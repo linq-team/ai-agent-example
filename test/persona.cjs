@@ -10,10 +10,14 @@ process.env.OPENAI_API_KEY = 'test';
 process.env.AGENT_NAME = 'Ada';
 process.env.AGENT_PERSONA = 'You are Ada, a test persona.';
 delete process.env.AGENT_PERSONA_FILE;
+// The /help test expects the default limits
+delete process.env.DAILY_MESSAGE_LIMIT_PER_SENDER;
+delete process.env.DAILY_IMAGE_LIMIT_PER_SENDER;
 const Anthropic = require('@anthropic-ai/sdk');
 const conversation = require('../dist/state/conversation.js');
 const { loadPersona, defaultPersona, personaSummary } = require('../dist/persona.js');
-const { chat, buildSystemPrompt, helpText, getGroupChatAction } = require('../dist/claude/client.js');
+const { chat, buildSystemPrompt, helpText, getGroupChatAction, getTextForEffect } = require('../dist/claude/client.js');
+const usage = require('../dist/state/usage.js');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'persona-'));
 after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
@@ -34,6 +38,8 @@ test('default persona: Claude, generic identity, Linq links and casual style', (
     assert.ok(persona.text.includes(link), link);
   }
   assert.match(persona.text, /## Response Style/);
+  // True for a fork with its own changes, too
+  assert.match(persona.text, /This bot is built from Linq's open-source example code \(MIT license\)/);
   assert.equal(loadPersona({ AGENT_NAME: ' Linq Sullivan ' }).text, defaultPersona('Linq Sullivan'));
   assert.match(defaultPersona('Linq Sullivan'), /^You are Linq Sullivan, an AI agent/);
 });
@@ -118,6 +124,22 @@ test('system prompt is the chosen persona followed by the mechanics', () => {
     '## Text Decorations (iMessage only)', '## Sharing your contact']) {
     assert.ok(prompt.includes(section), section);
   }
+  // A key line from the body of each mechanics section, so moving one into the persona fails
+  for (const line of ['Put --- between parts of a reply to send them as separate messages.',
+    "it gets automatically transcribed and you'll see it as [Voice memo transcript",
+    'ONLY rename if someone EXPLICITLY asks to name/rename the chat',
+    'you can remove/kick someone from the chat when EXPLICITLY asked',
+    '/clear - Reset conversation history and start fresh',
+    "This is a demo built on Linq's messaging API, not a general-purpose assistant, and it has daily usage limits.",
+    'You can search the web for current information',
+    'NEVER write "[reacted with ...]" in your text',
+    'ANTI-LOOP PROTECTION',
+    'NEVER use send_effect without also writing text in your response',
+    'Do NOT nest decorations']) {
+    assert.ok(prompt.includes(line), line);
+  }
+  // The mechanics make no claim about who runs the agent, and nothing points to homework
+  assert.doesNotMatch(prompt, /public demo of Linq|homework/);
   assert.equal(prompt.includes('## Response Style'), false);
   assert.equal(prompt.includes('Anthropic'), false);
   assert.equal(prompt.includes('claude.ai'), false);
@@ -188,6 +210,30 @@ test('commands and limit messages are plain and name-neutral', async () => {
     conversation.clearConversation = originalClear;
     conversation.clearUserProfile = originalForget;
   }
-  const usageSource = fs.readFileSync(require.resolve('../dist/state/usage.js'), 'utf8');
-  assert.doesNotMatch(usageSource, /claude\.ai|yo ive|woah/);
+  const limitTexts = {
+    USER_MESSAGE_LIMIT_TEXT: "You've reached today's message limit for this demo. Try again tomorrow.",
+    CHAT_MESSAGE_LIMIT_TEXT: "This chat has reached today's message limit for this demo. It resets tomorrow.",
+    GLOBAL_MESSAGE_LIMIT_TEXT: 'This demo is at capacity for today. Please check back tomorrow.',
+    RATE_LIMIT_TEXT: "That's a lot of messages at once. This demo needs a short break, so try again in a few minutes.",
+    USER_IMAGE_LIMIT_TEXT: "You've reached today's image limit for this demo. Try again tomorrow.",
+    GLOBAL_IMAGE_LIMIT_TEXT: 'This demo has reached its image limit for today. Try again tomorrow.',
+  };
+  for (const [name, text] of Object.entries(limitTexts)) assert.equal(usage[name], text, name);
+});
+
+test('text written for an effect uses the persona', async () => {
+  const originalCreate = Anthropic.Messages.prototype.create;
+  let request;
+  Anthropic.Messages.prototype.create = async options => {
+    request = options;
+    return { content: [{ type: 'text', text: 'Fireworks for you!' }] };
+  };
+  try {
+    assert.equal(await getTextForEffect('fireworks'), 'Fireworks for you!');
+    assert.equal(request.system, 'You are Ada, a test persona.');
+    assert.match(request.messages[0].content, /fireworks iMessage effect/);
+    assert.doesNotMatch(request.messages[0].content, /fun/);
+  } finally {
+    Anthropic.Messages.prototype.create = originalCreate;
+  }
 });

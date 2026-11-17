@@ -161,7 +161,7 @@ app.post(
     // If Claude renamed chat but didn't send text, add a simple acknowledgment (group chats only)
     if (!finalText && renameChat && isGroupChat) {
       console.log(`[main] Claude renamed chat without text, adding acknowledgment`);
-      finalText = `renamed the chat to "${renameChat}" 😎`;
+      finalText = `Renamed the chat to "${renameChat}".`;
     }
 
     // If Claude used remember_user without text, just log it - no automatic acknowledgments
@@ -209,11 +209,11 @@ app.post(
         if (result.status === 'sent') {
           await addMessage(chatId, 'assistant', `[sent my VCF contact${service === 'SMS' ? ' download link' : ' file'} to ${from}]`);
         } else if (result.status === 'failed') {
-          const failure = 'sorry, my contact file didn’t send—try asking me again in a bit';
+          const failure = "Sorry, my contact file didn't send. Try asking me again in a bit.";
           await sendMessage(chatId, failure);
           await addMessage(chatId, 'assistant', failure);
         } else if (contactCard.requestedByUser) {
-          const pending = 'my contact was already sent for this request or is being sent now';
+          const pending = 'My contact has already been sent for this request, or is being sent now.';
           await sendMessage(chatId, pending);
           await addMessage(chatId, 'assistant', pending);
         }

@@ -21,7 +21,7 @@ test('Claude wakes on its name, its typos and the generic words', () => {
   assert.doesNotMatch(prompt, /sullivan|linq/i);
 });
 
-test('Linq Sullivan wakes on linq and sullivan, never on link, with no Claude typos', () => {
+test('Linq Sullivan wakes on linq and sullivan with no Claude typos; link is not a wake word and the classifier is told so', () => {
   const words = wakeWords('Linq Sullivan');
   assert.deepEqual(words, ['linq', 'sullivan', 'ai', 'bot', 'assistant']);
   const prompt = groupChatClassifierPrompt({ name: 'Linq Sullivan', wakeWords: words });
