@@ -36,7 +36,7 @@ If someone asks what you can do or wants to see features, here's what's availabl
 
 **You've probably already noticed:** I mark messages as read when I receive them, and show a typing indicator while I'm thinking - just like a real person texting!
 
-**Group chat naming:** In group chats, ONLY rename if someone EXPLICITLY asks to name/rename the chat (e.g., "claude name this chat" or "rename the group"). Do NOT rename unprompted. Always send a text response too.
+**Group chat naming:** In group chats, ONLY rename if someone EXPLICITLY asks to name/rename the chat (e.g., "name this chat" or "rename the group"). Do NOT rename unprompted. Always send a text response too.
 
 **Removing members:** In group chats, you can remove/kick someone from the chat when EXPLICITLY asked (e.g., "kick tomo out", "remove +14155551234"). You need their phone number/handle - check the participant list. ONLY do this when someone clearly asks. Always send a text response confirming what you did.
 
@@ -696,13 +696,72 @@ export async function getTextForEffect(effectName: string): Promise<string> {
 export type GroupChatAction = 'respond' | 'react' | 'ignore';
 
 /**
- * Use Haiku to quickly determine how Claude should handle a group chat message.
+ * System prompt for the group chat classifier. The agent's name and wake words
+ * come from the persona (src/persona.ts).
+ */
+export function groupChatClassifierPrompt(persona: Pick<Persona, 'name' | 'wakeWords'> = getPersona()): string {
+  const { name, wakeWords } = persona;
+  const isClaude = /claude/i.test(name);
+  const word = wakeWords[0];
+
+  let prompt = `You classify how an AI assistant "${name}" should handle messages in a group chat.
+
+IMPORTANT: BIAS TOWARD "respond" - text responses are almost always better than reactions. Only use "react" for very brief acknowledgments where a text response would be awkward.
+
+Answer with ONE of these:
+- "respond" - ${name} should send a text reply. USE THIS BY DEFAULT when:
+  * They asked ${name} anything
+  * They ask for ${name}'s contact, contact card, vCard, or VCF (including resends)
+  * They used any of these words, in any capitalization: ${wakeWords.map(w => `"${w}"`).join(', ')}
+  * They're talking to ${name} or continuing a conversation
+  * It's a follow-up to ${name}'s message
+  * You're unsure - default to respond
+- "react:love" or "react:like" or "react:laugh" - ONLY for brief acknowledgments where text would be weird (like a simple "thanks!" or "lol"). Do NOT overuse reactions.
+- "ignore" - Human-to-human conversation not involving ${name} at all
+
+ANTI-REACTION-LOOP: If you see reactions in recent context, prefer "respond" to break the pattern. People want conversation, not tapbacks.`;
+
+  if (isClaude) {
+    prompt += `
+
+MISSPELLING TOLERANCE: People often typo "Claude" as cluade, cloude, cladue, claud, ckaude, etc. Treat these as mentions of Claude and respond!`;
+  }
+  if (wakeWords.includes('linq')) {
+    prompt += `
+
+"link" is an ordinary word, not "linq": "send me the link" is not a mention of ${name}.`;
+  }
+
+  prompt += `
+
+Examples:
+- "hey ${word} what's the weather" -> respond`;
+  if (isClaude) {
+    prompt += `
+- "cluade what do u think" -> respond (misspelling!)
+- "cloude help me" -> respond (misspelling!)`;
+  }
+  prompt += `
+- "${word} thoughts?" -> respond
+- "that's cool ${word}" -> respond (engage, don't just react!)
+- "thanks!" (very brief, nothing to add) -> react:love
+- "yo mike you coming tonight?" -> ignore`;
+  if (wakeWords.includes('linq')) {
+    prompt += `
+- "mike can you send me the link?" -> ignore`;
+  }
+  return prompt;
+}
+
+/**
+ * Use Haiku to quickly determine how the agent should handle a group chat message.
  * Returns 'respond' (full message), 'react' (just tapback), or 'ignore'.
  */
 export async function getGroupChatAction(
   message: string,
   sender: string,
-  chatId: string
+  chatId: string,
+  persona: Persona = getPersona()
 ): Promise<{ action: GroupChatAction; reaction?: Reaction }> {
   const start = Date.now();
 
@@ -715,7 +774,7 @@ export async function getGroupChatAction(
     // Format with sender handles so Claude knows who said what
     const formatted = recentMessages.map(msg => {
       if (msg.role === 'assistant') {
-        return `Claude: ${msg.content}`;
+        return `${persona.name}: ${msg.content}`;
       } else {
         // Show who sent the message in group chats
         const sender = msg.handle || 'Someone';
@@ -732,37 +791,10 @@ export async function getGroupChatAction(
     const response = await client.messages.create({
       model: 'claude-haiku-4-5',
       max_tokens: 20,
-      system: `You classify how an AI assistant "Claude" should handle messages in a group chat.
-
-IMPORTANT: BIAS TOWARD "respond" - text responses are almost always better than reactions. Only use "react" for very brief acknowledgments where a text response would be awkward.
-
-Answer with ONE of these:
-- "respond" - Claude should send a text reply. USE THIS BY DEFAULT when:
-  * They asked Claude anything
-  * They ask for Claude's contact, contact card, vCard, or VCF (including resends)
-  * They mentioned Claude (or misspelled it - cluade, cloude, cladue, claud, etc.)
-  * They mentioned "AI", "bot", "assistant", or "Sullivan"
-  * They're talking to Claude or continuing a conversation
-  * It's a follow-up to Claude's message
-  * You're unsure - default to respond
-- "react:love" or "react:like" or "react:laugh" - ONLY for brief acknowledgments where text would be weird (like a simple "thanks!" or "lol"). Do NOT overuse reactions.
-- "ignore" - Human-to-human conversation not involving Claude at all
-
-ANTI-REACTION-LOOP: If you see reactions in recent context, prefer "respond" to break the pattern. People want conversation, not tapbacks.
-
-MISSPELLING TOLERANCE: People often typo "Claude" as cluade, cloude, cladue, claud, ckaude, etc. Treat these as mentions of Claude and respond!
-
-Examples:
-- "hey claude what's the weather" -> respond
-- "cluade what do u think" -> respond (misspelling!)
-- "cloude help me" -> respond (misspelling!)
-- "claude thoughts?" -> respond
-- "that's cool claude" -> respond (engage, don't just react!)
-- "thanks!" (very brief, nothing to add) -> react:love
-- "yo mike you coming tonight?" -> ignore`,
+      system: groupChatClassifierPrompt(persona),
       messages: [{
         role: 'user',
-        content: `${contextBlock}New message from ${sender}: "${message}"\n\nHow should Claude handle this?`
+        content: `${contextBlock}New message from ${sender}: "${message}"\n\nHow should ${persona.name} handle this?`
       }],
     });
 
