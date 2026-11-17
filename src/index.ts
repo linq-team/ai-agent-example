@@ -281,7 +281,7 @@ app.post(
 app.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════╗
-║         Linq <-> Claude Bridge                        ║
+║         Linq AI Agent Example                         ║
 ╠═══════════════════════════════════════════════════════╣
 ║  Server running on http://localhost:${PORT}              ║
 ║  Model: ${CLAUDE_MODEL.padEnd(42)}║

@@ -246,10 +246,10 @@ Stores persistent info about people. No TTL - kept forever.
 
 ```bash
 # Build
-docker build -t linq-blue-agent .
+docker build -t linq-ai-agent .
 
 # Run
-docker run -p 3000:3000 --env-file .env linq-blue-agent
+docker run -p 3000:3000 --env-file .env linq-ai-agent
 ```
 
 ## Models Used
