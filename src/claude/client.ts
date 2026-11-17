@@ -49,7 +49,7 @@ Available commands (tell users about these if they ask):
 If someone asks how to use this, what commands are available, or how to make you forget something, tell them about the relevant commands.
 
 ## This is a limited demo
-You're a public demo of Linq's messaging API, not a general-purpose AI replacement. Keep answers helpful but concise. This demo has daily usage limits. If someone is clearly using you as their daily-driver AI (homework, long research, lots of unrelated questions), you can mention they should use claude.ai for heavy use. Don't lead with this - only if relevant.
+You're a public demo of Linq's messaging API, not a general-purpose AI replacement. Keep answers helpful but concise. This demo has daily usage limits. If someone is clearly using you as their daily-driver AI (homework, long research, lots of unrelated questions), you can mention that this demo isn't meant for heavy use. Don't lead with this - only if relevant.
 
 You can search the web for current information like weather, news, sports scores, etc. Use web search when you need up-to-date information.
 
@@ -150,9 +150,9 @@ You can style and animate specific words in your messages using {decoration:cont
 **Animations:** {shake:text}, {explode:text}, {ripple:text}, {bloom:text}, {jitter:text}, {nod:text}, {big:text}, {small:text}
 
 Examples:
-- "thats {bold:insane}" → "insane" appears bold
+- "The launch is {bold:today}" → "today" appears bold
 - "{shake:EARTHQUAKE}" → "EARTHQUAKE" shakes on screen
-- "u really {explode:killed it} today" → "killed it" explodes
+- "Congrats on the {explode:new job}!" → "new job" explodes
 
 Rules:
 - Use sparingly for emphasis or fun moments - dont overdo it
@@ -429,15 +429,15 @@ export function isSlashCommand(text: string): boolean {
   return cmd === '/help' || cmd === '/clear' || cmd === '/forget me' || cmd === '/forgetme';
 }
 
-function helpText(): string {
-  const msgLimit = USAGE_LIMITS.messagesPerSender > 0 ? `${USAGE_LIMITS.messagesPerSender} msgs/day` : null;
-  const imgLimit = USAGE_LIMITS.imagesPerSender > 0 ? `${USAGE_LIMITS.imagesPerSender} images/day` : null;
-  const limits = [msgLimit, imgLimit].filter(Boolean).join(', ');
+export function helpText(): string {
+  const msgLimit = USAGE_LIMITS.messagesPerSender > 0 ? `${USAGE_LIMITS.messagesPerSender} messages` : null;
+  const imgLimit = USAGE_LIMITS.imagesPerSender > 0 ? `${USAGE_LIMITS.imagesPerSender} images` : null;
+  const limits = [msgLimit, imgLimit].filter(Boolean).join(' and ');
   const limitLine = limits
-    ? `\n\nthis is a demo bot (${limits}) - not a replacement for claude.ai`
-    : '\n\nthis is a demo bot, not a replacement for claude.ai';
+    ? `\n\nThis is a demo, limited to ${limits} a day per person.`
+    : '\n\nThis is a demo, not a general-purpose assistant.';
 
-  return `commands:\n/clear - reset our conversation\n/forget me - erase what i know about you\n/help - this message${limitLine}`;
+  return `Commands:\n/clear - start a fresh conversation\n/forget me - erase what I know about you\n/help - show this list${limitLine}`;
 }
 
 export async function chat(chatId: string, userMessage: string, images: ImageInput[] = [], audio: AudioInput[] = [], chatContext?: ChatContext): Promise<ChatResponse> {
@@ -465,7 +465,7 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
   if (cmd === '/clear') {
     await clearConversation(chatId);
     return {
-      text: "conversation cleared, fresh start 🧹",
+      text: "Conversation cleared. Let's start fresh.",
       ...emptyResponse,
     };
   }
@@ -474,12 +474,12 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
     if (chatContext?.senderHandle) {
       await clearUserProfile(chatContext.senderHandle);
       return {
-        text: "done, i've forgotten everything about you. we're strangers now 👋",
+        text: "Done. I've forgotten everything I knew about you.",
         ...emptyResponse,
       };
     }
     return {
-      text: "hmm couldn't figure out who you are to forget you",
+      text: "Sorry, I couldn't tell who you are, so there was nothing to forget.",
       ...emptyResponse,
     };
   }

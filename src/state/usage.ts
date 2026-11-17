@@ -164,17 +164,17 @@ function checkRateLimit(handle: string): { allowed: boolean; notify: boolean } {
 }
 
 const USER_MESSAGE_LIMIT_TEXT =
-  "yo ive hit my daily limit with u - this is just a linq demo bot, not a full-time ai. try again tomorrow or hop on claude.ai for the real thing";
+  "You've reached today's message limit for this demo. Try again tomorrow.";
 const CHAT_MESSAGE_LIMIT_TEXT =
-  "this chat hit my daily demo limit - im just a linq demo bot so i gotta cap it here. resets tomorrow!";
+  "This chat has reached today's message limit for this demo. It resets tomorrow.";
 const GLOBAL_MESSAGE_LIMIT_TEXT =
-  "this demo is at capacity for today, check back tomorrow. for actual ai stuff claude.ai is the move";
+  "This demo is at capacity for today. Please check back tomorrow.";
 const RATE_LIMIT_TEXT =
-  "woah easy 😅 im a demo bot so i gotta pace myself. try again in a few";
+  "That's a lot of messages at once. This demo needs a short break, so try again in a few minutes.";
 const USER_IMAGE_LIMIT_TEXT =
-  "i can only make a couple images a day on this demo, try again tomorrow";
+  "You've reached today's image limit for this demo. Try again tomorrow.";
 const GLOBAL_IMAGE_LIMIT_TEXT =
-  "hit the demo's image cap for today, try again tomorrow";
+  "This demo has reached its image limit for today. Try again tomorrow.";
 
 export async function consumeMessageQuota(handle: string, chatId: string): Promise<QuotaResult> {
   if (isUnlimited(handle)) {

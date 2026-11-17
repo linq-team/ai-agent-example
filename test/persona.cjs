@@ -13,7 +13,7 @@ delete process.env.AGENT_PERSONA_FILE;
 const Anthropic = require('@anthropic-ai/sdk');
 const conversation = require('../dist/state/conversation.js');
 const { loadPersona, defaultPersona } = require('../dist/persona.js');
-const { chat, buildSystemPrompt } = require('../dist/claude/client.js');
+const { chat, buildSystemPrompt, helpText } = require('../dist/claude/client.js');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'persona-'));
 after(() => fs.rmSync(tempDir, { recursive: true, force: true }));
@@ -90,6 +90,9 @@ test('system prompt is the chosen persona followed by the mechanics', () => {
   }
   assert.equal(prompt.includes('## Response Style'), false);
   assert.equal(prompt.includes('Anthropic'), false);
+  assert.equal(prompt.includes('claude.ai'), false);
+  assert.match(prompt, /"The launch is \{bold:today\}"/);
+  assert.doesNotMatch(prompt, /insane|killed it/);
 
   const fallback = buildSystemPrompt(undefined, loadPersona({}));
   assert.ok(fallback.startsWith(defaultPersona('Claude')));
@@ -115,4 +118,24 @@ test('chat() sends the persona from the environment', async () => {
     conversation.getConversation = originalGet;
     conversation.addMessage = originalAdd;
   }
+});
+
+test('commands and limit messages are plain and name-neutral', async () => {
+  const originalClear = conversation.clearConversation;
+  const originalForget = conversation.clearUserProfile;
+  conversation.clearConversation = async () => {};
+  conversation.clearUserProfile = async () => {};
+  try {
+    const context = { isGroupChat: false, participantNames: [], chatName: null, senderHandle: '+14155550200' };
+    const help = (await chat('chat', '/help', [], [], context)).text;
+    assert.equal(help, helpText());
+    assert.match(help, /^Commands:\n\/clear - start a fresh conversation\n\/forget me - erase what I know about you\n\/help - show this list\n\nThis is a demo, limited to 25 messages and 3 images a day per person\.$/);
+    assert.equal((await chat('chat', '/clear', [], [], context)).text, "Conversation cleared. Let's start fresh.");
+    assert.equal((await chat('chat', '/forget me', [], [], context)).text, "Done. I've forgotten everything I knew about you.");
+  } finally {
+    conversation.clearConversation = originalClear;
+    conversation.clearUserProfile = originalForget;
+  }
+  const usageSource = fs.readFileSync(require.resolve('../dist/state/usage.js'), 'utf8');
+  assert.doesNotMatch(usageSource, /claude\.ai|yo ive|woah/);
 });
