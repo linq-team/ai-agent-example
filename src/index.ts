@@ -7,6 +7,7 @@ import { getUserProfile, addMessage, consumeMessageQuota, consumeImageQuota, log
 import { processResponse } from './text/decorations.js';
 import { sendBotContact } from './contact/sharing.js';
 import { getContactShareStatus } from './state/contact.js';
+import { getPersona, personaSummary } from './persona.js';
 
 // Track message count per chat for contact card sharing
 const chatMessageCount = new Map<string, number>();
@@ -14,6 +15,16 @@ const CONTACT_CARD_INTERVAL = 5; // Share every N messages
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// Check the persona settings now rather than on the first message
+try {
+  const persona = getPersona();
+  console.log(`[persona] ${personaSummary(persona)}`);
+  for (const warning of persona.warnings) console.warn(`[persona] Warning: ${warning}`);
+} catch (error) {
+  console.error(`[persona] ${(error as Error).message}`);
+  process.exit(1);
+}
 
 // Parse JSON bodies
 app.use(express.json());
@@ -150,7 +161,7 @@ app.post(
     // If Claude renamed chat but didn't send text, add a simple acknowledgment (group chats only)
     if (!finalText && renameChat && isGroupChat) {
       console.log(`[main] Claude renamed chat without text, adding acknowledgment`);
-      finalText = `renamed the chat to "${renameChat}" 😎`;
+      finalText = `Renamed the chat to "${renameChat}".`;
     }
 
     // If Claude used remember_user without text, just log it - no automatic acknowledgments
@@ -198,11 +209,11 @@ app.post(
         if (result.status === 'sent') {
           await addMessage(chatId, 'assistant', `[sent my VCF contact${service === 'SMS' ? ' download link' : ' file'} to ${from}]`);
         } else if (result.status === 'failed') {
-          const failure = 'sorry, my contact file didn’t send—try asking me again in a bit';
+          const failure = "Sorry, my contact file didn't send. Try asking me again in a bit.";
           await sendMessage(chatId, failure);
           await addMessage(chatId, 'assistant', failure);
         } else if (contactCard.requestedByUser) {
-          const pending = 'my contact was already sent for this request or is being sent now';
+          const pending = 'My contact has already been sent for this request, or is being sent now.';
           await sendMessage(chatId, pending);
           await addMessage(chatId, 'assistant', pending);
         }
@@ -227,7 +238,7 @@ app.post(
             console.log(`[timing] generateImage + sendImage: ${Date.now() - start}ms`);
           } else {
             // Image generation failed - let user know
-            await sendMessage(chatId, 'sorry the image didnt work, try again?');
+            await sendMessage(chatId, "Sorry, the image didn't work. Try again?");
             console.log(`[main] Image generation failed`);
           }
         }
@@ -250,7 +261,7 @@ app.post(
             console.log(`[timing] generateIcon + setIcon: ${Date.now() - start}ms`);
           } else {
             // Image generation failed - let user know
-            await sendMessage(chatId, 'sorry couldnt set the icon, try again?');
+            await sendMessage(chatId, "Sorry, I couldn't set the group icon. Try again?");
             console.log(`[main] Group icon generation failed`);
           }
         }
@@ -271,7 +282,7 @@ app.post(
 app.listen(PORT, () => {
   console.log(`
 ╔═══════════════════════════════════════════════════════╗
-║         Linq <-> Claude Bridge                        ║
+║         Linq AI Agent Example                         ║
 ╠═══════════════════════════════════════════════════════╣
 ║  Server running on http://localhost:${PORT}              ║
 ║  Model: ${CLAUDE_MODEL.padEnd(42)}║

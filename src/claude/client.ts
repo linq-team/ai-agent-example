@@ -4,32 +4,20 @@ import { getConversation, addMessage, clearConversation, getUserProfile, setUser
 import { USAGE_LIMITS } from '../state/usage.js';
 import { SEND_CONTACT_CARD_TOOL, parseContactCardRequest, contactSharingPrompt, ContactCardRequest } from '../contact/tool.js';
 import type { ContactShareStatus } from '../state/contact.js';
+import { getPersona, Persona } from '../persona.js';
 
 export const CLAUDE_MODEL = process.env.CLAUDE_MODEL || 'claude-haiku-4-5';
 
 const client = new Anthropic();
 const openai = new OpenAI();
 
-const SYSTEM_PROMPT = `You are Claude, Anthropic's AI assistant, accessible via text message as "Claude Sullivan".
-
-This is a demo app built on the Linq v3 API, created by Patrick Sullivan (CTO of Linq) to showcase what's possible with programmatic messaging. You're Claude under the hood - be upfront about that if asked.
-
-**IMPORTANT: Linq's website is linqapp.com (NOT linq.com). Always use linqapp.com when referring to Linq's website or linking to Linq pages.**
-
-**Pricing:** You don't know specific pricing details. If people ask about pricing, tell them to reach out to Linq or check out linqapp.com for more info.
-
-The backend code for this bot is fully open source (MIT license). If anyone asks how this works, how to build something similar, or about the source code, let them know:
-- GitHub repo: https://github.com/linq-team/ai-agent-example
-- Linq AI agent use cases: https://linqapp.com/s/use-cases/ai-agent
-- Linq platform: https://linqapp.com
-
-**Linq Sandbox:** Linq offers a sandbox to let people start building on the platform. It gives you a real Linq number capable of iMessage, RCS, and SMS with limited usage for about a week. If someone wants to try building on Linq, point them to https://dashboard.linqapp.com/sandbox-signup/ to request access. Some people get approved immediately. Beyond the sandbox, Linq is a paid platform.
-
-Linq supports both iMessage and RCS (Rich Communication Services), so you can reach people on both iPhone and Android with rich features like reactions, typing indicators, and read receipts.
-
-Since this is a demo, people may ask you to show off features like reactions, message effects (fireworks, confetti, etc.), or other messaging capabilities. Feel free to demonstrate these when asked! It's part of what makes this demo cool. Note: some features like screen effects are iMessage-only, but reactions and typing indicators work on both iMessage and RCS.
+// Mechanics: always part of the system prompt, after the persona (src/persona.ts)
+const MECHANICS_PROMPT = `## How your replies are sent
+Your reply is sent as text messages. Put --- between parts of a reply to send them as separate messages.
 
 ## Demo Capabilities
+Since this is a demo, people may ask you to show off features like reactions, message effects (fireworks, confetti, etc.), or other messaging capabilities. Feel free to demonstrate these when asked! It's part of what makes this demo cool. Note: some features like screen effects are iMessage-only, but reactions and typing indicators work on both iMessage and RCS.
+
 If someone asks what you can do or wants to see features, here's what's available:
 
 **iMessage Reactions:** Standard tapbacks (love ❤️, like 👍, dislike 👎, laugh 😂, emphasize !!, question ?) OR any custom emoji (🔥, 💯, 🎉, 👀, 🙌, etc.)
@@ -48,41 +36,11 @@ If someone asks what you can do or wants to see features, here's what's availabl
 
 **You've probably already noticed:** I mark messages as read when I receive them, and show a typing indicator while I'm thinking - just like a real person texting!
 
-**Group chat naming:** In group chats, ONLY rename if someone EXPLICITLY asks to name/rename the chat (e.g., "claude name this chat" or "rename the group"). Do NOT rename unprompted. Always send a text response too.
+**Group chat naming:** In group chats, ONLY rename if someone EXPLICITLY asks to name/rename the chat (e.g., "name this chat" or "rename the group"). Do NOT rename unprompted. Always send a text response too.
 
 **Removing members:** In group chats, you can remove/kick someone from the chat when EXPLICITLY asked (e.g., "kick tomo out", "remove +14155551234"). You need their phone number/handle - check the participant list. ONLY do this when someone clearly asks. Always send a text response confirming what you did.
 
-## Response Style
-You're texting - write like you're texting a friend, NOT writing an essay. Channel casual gen z texting vibes.
-
-CRITICAL: Mirror how humans actually text:
-- Humans don't send giant blocks of text - they send multiple short messages
-- Use "---" to split your response into separate messages that will be sent individually
-- Each message should be 1-2 sentences max
-- This feels more natural and conversational
-
-Example - instead of one long message:
-"Hey! The weather today is 72°F and sunny. Perfect for going outside. Maybe hit up a park or grab lunch on a patio. Enjoy!"
-
-Do this (use --- to split):
-"its 72 and sunny rn ☀️
----
-lowkey perfect day to be outside
----
-maybe hit up a park or grab lunch on a patio"
-
-Guidelines:
-- NO markdown (no bullets, headers, bold, numbered lists)
-- Lowercase by default - skip caps unless you're emphasizing something
-- Skip apostrophes - "dont", "cant", "im", "youre", "its", "thats"
-- Casual abbreviations sometimes - "u", "ur", "rn", "tbh", "ngl"
-- Gen Z phrases VERY RARELY (like once every few convos max) - "lowkey", "valid", "real". dont force it
-- Emojis sparingly - a well-placed 💀 or ✨ is fine but dont overdo it
-- Split into 2-4 messages for anything longer than a quick reply
-- If sharing multiple items (quotes, facts, etc.), each can be its own message
-
-The vibe is: natural, chill, like texting a friend. Write normally but casual - dont try to sound like a gen z tiktok. If slang feels forced, skip it.
-
+## Commands
 Available commands (tell users about these if they ask):
 - /clear - Reset conversation history and start fresh
 - /forget me - Erase everything you know about them (name, facts)
@@ -91,7 +49,7 @@ Available commands (tell users about these if they ask):
 If someone asks how to use this, what commands are available, or how to make you forget something, tell them about the relevant commands.
 
 ## This is a limited demo
-You're a public demo of Linq's messaging API, not a general-purpose AI replacement. Keep answers helpful but concise. This demo has daily usage limits. If someone is clearly using you as their daily-driver AI (homework, long research, lots of unrelated questions), you can mention they should use claude.ai for heavy use. Don't lead with this - only if relevant.
+This is a demo built on Linq's messaging API, not a general-purpose assistant, and it has daily usage limits. Keep answers helpful but concise. If someone is clearly using you as their everyday assistant, you can mention that this demo isn't meant for heavy use. Don't lead with this - only if relevant.
 
 You can search the web for current information like weather, news, sports scores, etc. Use web search when you need up-to-date information.
 
@@ -137,8 +95,8 @@ Available effects (only use when requested):
 
 DEFAULT BEHAVIOR: Just write a text response. Only add an effect if explicitly asked.`;
 
-function buildSystemPrompt(chatContext?: ChatContext): string {
-  let prompt = SYSTEM_PROMPT;
+export function buildSystemPrompt(chatContext?: ChatContext, persona: Persona = getPersona()): string {
+  let prompt = `${persona.text}\n\n${MECHANICS_PROMPT}`;
 
   // Add user profile info if available
   if (chatContext?.senderHandle) {
@@ -175,7 +133,7 @@ In group chats:
 
   if (chatContext?.incomingEffect) {
     prompt += `\n\n## Incoming Message Effect
-The user sent their message with a ${chatContext.incomingEffect.type} effect: "${chatContext.incomingEffect.name}". You can acknowledge this if relevant (e.g., "nice ${chatContext.incomingEffect.name} effect!").`;
+The user sent their message with a ${chatContext.incomingEffect.type} effect: "${chatContext.incomingEffect.name}". You can acknowledge this if relevant (e.g., "Nice ${chatContext.incomingEffect.name} effect!").`;
   }
 
   if (chatContext?.service) {
@@ -192,12 +150,12 @@ You can style and animate specific words in your messages using {decoration:cont
 **Animations:** {shake:text}, {explode:text}, {ripple:text}, {bloom:text}, {jitter:text}, {nod:text}, {big:text}, {small:text}
 
 Examples:
-- "thats {bold:insane}" → "insane" appears bold
+- "The launch is {bold:today}" → "today" appears bold
 - "{shake:EARTHQUAKE}" → "EARTHQUAKE" shakes on screen
-- "u really {explode:killed it} today" → "killed it" explodes
+- "Congrats on the {explode:new job}!" → "new job" explodes
 
 Rules:
-- Use sparingly for emphasis or fun moments - dont overdo it
+- Use sparingly for emphasis or fun moments - don't overdo it
 - Great for: emphasizing a key word, making something dramatic/funny, reacting to big news
 - Do NOT decorate every message - most messages should be plain text
 - Do NOT nest decorations (no {bold:{shake:text}})
@@ -294,7 +252,7 @@ const REMEMBER_USER_TOOL: Anthropic.Tool = {
 
 const GENERATE_IMAGE_TOOL: Anthropic.Tool = {
   name: 'generate_image',
-  description: 'Generate an image using DALL-E. Use when the user asks you to create, draw, generate, or make an image/picture/photo. Expand their request into a detailed prompt for better results. IMPORTANT: You MUST also write a brief text message (like "on it, making that corgi now" or "lemme draw that for u") - this message will be sent BEFORE the image starts generating so the user knows something is happening.',
+  description: 'Generate an image. Use when the user asks you to create, draw, generate, or make an image/picture/photo. Expand their request into a detailed prompt for better results. IMPORTANT: You MUST also write a brief text message (like "On it, drawing that corgi now.") - this message will be sent BEFORE the image starts generating so the user knows something is happening.',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -309,7 +267,7 @@ const GENERATE_IMAGE_TOOL: Anthropic.Tool = {
 
 const SET_GROUP_ICON_TOOL: Anthropic.Tool = {
   name: 'set_group_chat_icon',
-  description: 'Set the group chat icon/photo using a DALL-E generated image. ONLY use in group chats when someone explicitly asks to set/change the group icon/photo/picture. Expand their request into a detailed prompt. IMPORTANT: You MUST also write a brief text message acknowledging the request.',
+  description: 'Set the group chat icon/photo to a generated image. ONLY use in group chats when someone explicitly asks to set/change the group icon/photo/picture. Expand their request into a detailed prompt. IMPORTANT: You MUST also write a brief text message acknowledging the request.',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -471,15 +429,15 @@ export function isSlashCommand(text: string): boolean {
   return cmd === '/help' || cmd === '/clear' || cmd === '/forget me' || cmd === '/forgetme';
 }
 
-function helpText(): string {
-  const msgLimit = USAGE_LIMITS.messagesPerSender > 0 ? `${USAGE_LIMITS.messagesPerSender} msgs/day` : null;
-  const imgLimit = USAGE_LIMITS.imagesPerSender > 0 ? `${USAGE_LIMITS.imagesPerSender} images/day` : null;
-  const limits = [msgLimit, imgLimit].filter(Boolean).join(', ');
+export function helpText(): string {
+  const msgLimit = USAGE_LIMITS.messagesPerSender > 0 ? `${USAGE_LIMITS.messagesPerSender} messages` : null;
+  const imgLimit = USAGE_LIMITS.imagesPerSender > 0 ? `${USAGE_LIMITS.imagesPerSender} images` : null;
+  const limits = [msgLimit, imgLimit].filter(Boolean).join(' and ');
   const limitLine = limits
-    ? `\n\nthis is a demo bot (${limits}) - not a replacement for claude.ai`
-    : '\n\nthis is a demo bot, not a replacement for claude.ai';
+    ? `\n\nThis is a demo, limited to ${limits} a day per person.`
+    : '\n\nThis is a demo, not a general-purpose assistant.';
 
-  return `commands:\n/clear - reset our conversation\n/forget me - erase what i know about you\n/help - this message${limitLine}`;
+  return `Commands:\n/clear - start a fresh conversation\n/forget me - erase what I know about you\n/help - show this list${limitLine}`;
 }
 
 export async function chat(chatId: string, userMessage: string, images: ImageInput[] = [], audio: AudioInput[] = [], chatContext?: ChatContext): Promise<ChatResponse> {
@@ -507,7 +465,7 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
   if (cmd === '/clear') {
     await clearConversation(chatId);
     return {
-      text: "conversation cleared, fresh start 🧹",
+      text: "Conversation cleared. Let's start fresh.",
       ...emptyResponse,
     };
   }
@@ -516,12 +474,12 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
     if (chatContext?.senderHandle) {
       await clearUserProfile(chatContext.senderHandle);
       return {
-        text: "done, i've forgotten everything about you. we're strangers now 👋",
+        text: "Done. I've forgotten everything I knew about you.",
         ...emptyResponse,
       };
     }
     return {
-      text: "hmm couldn't figure out who you are to forget you",
+      text: "Sorry, I couldn't tell who you are, so there was nothing to forget.",
       ...emptyResponse,
     };
   }
@@ -717,34 +675,99 @@ export async function chat(chatId: string, userMessage: string, images: ImageInp
 }
 
 /**
- * Simple text-only completion for follow-up requests (no tools).
+ * Simple text-only completion for follow-up requests (no tools), written in
+ * the persona's style.
  */
-export async function getTextForEffect(effectName: string): Promise<string> {
+export async function getTextForEffect(effectName: string, persona: Persona = getPersona()): Promise<string> {
   const response = await client.messages.create({
     model: 'claude-haiku-4-5',
     max_tokens: 100,
+    system: persona.text,
     messages: [{
       role: 'user',
-      content: `Write a very short, fun message (under 10 words) to send with a ${effectName} iMessage effect. Just the message, nothing else.`
+      content: `Write a very short message (under 10 words), in your usual style, to send with a ${effectName} iMessage effect. Just the message, nothing else.`
     }],
   });
 
   if (response.content[0].type === 'text') {
     return response.content[0].text;
   }
-  return `✨ ${effectName}! ✨`;
+  return `${effectName.replace(/_/g, ' ')} ✨`;
 }
 
 export type GroupChatAction = 'respond' | 'react' | 'ignore';
 
 /**
- * Use Haiku to quickly determine how Claude should handle a group chat message.
+ * System prompt for the group chat classifier. The agent's name and wake words
+ * come from the persona (src/persona.ts).
+ */
+export function groupChatClassifierPrompt(persona: Pick<Persona, 'name' | 'wakeWords'> = getPersona()): string {
+  const { name, wakeWords } = persona;
+  const isClaude = /claude/i.test(name);
+  const word = wakeWords[0];
+  const hasLinq = wakeWords.includes('linq');
+  // "linq" is also a company people talk about, so it gets its own rule below rather than "any of these words".
+  const listed = wakeWords.filter(w => w !== 'linq');
+
+  let prompt = `You classify how an AI assistant "${name}" should handle messages in a group chat.
+
+IMPORTANT: BIAS TOWARD "respond" - text responses are almost always better than reactions. Only use "react" for very brief acknowledgments where a text response would be awkward.
+
+Answer with ONE of these:
+- "respond" - ${name} should send a text reply. USE THIS BY DEFAULT when:
+  * They asked ${name} anything
+  * They ask for ${name}'s contact, contact card, vCard, or VCF (including resends)
+  * They used any of these words, in any capitalization: ${listed.map(w => `"${w}"`).join(', ')}
+  * They're talking to ${name} or continuing a conversation
+  * It's a follow-up to ${name}'s message
+  * You're unsure - default to respond
+- "react:love" or "react:like" or "react:laugh" - ONLY for brief acknowledgments where text would be weird (like a simple "thanks!" or "lol"). Do NOT overuse reactions.
+- "ignore" - Human-to-human conversation not involving ${name} at all
+
+ANTI-REACTION-LOOP: If you see reactions in recent context, prefer "respond" to break the pattern. People want conversation, not tapbacks.`;
+
+  if (isClaude) {
+    prompt += `
+
+MISSPELLING TOLERANCE: People often typo "Claude" as cluade, cloude, cladue, claud, ckaude, etc. Treat these as mentions of Claude and respond!`;
+  }
+  if (hasLinq) {
+    prompt += `
+
+"Linq" is part of ${name}'s name, and also a company people talk about. Respond to "linq" when they're talking to ${name} ("linq what can you do?"), not when people mention Linq to each other. "link" is an ordinary word, not "linq": "send me the link" is not a mention of ${name}.`;
+  }
+
+  prompt += `
+
+Examples:
+- "hey ${word} what's the weather" -> respond`;
+  if (isClaude) {
+    prompt += `
+- "cluade what do u think" -> respond (misspelling!)
+- "cloude help me" -> respond (misspelling!)`;
+  }
+  prompt += `
+- "${word} thoughts?" -> respond
+- "that's cool ${word}" -> respond (engage, don't just react!)
+- "thanks!" (very brief, nothing to add) -> react:love
+- "yo mike you coming tonight?" -> ignore`;
+  if (hasLinq) {
+    prompt += `
+- "mike did you sign up for the linq sandbox yet?" -> ignore
+- "mike can you send me the link?" -> ignore`;
+  }
+  return prompt;
+}
+
+/**
+ * Use Haiku to quickly determine how the agent should handle a group chat message.
  * Returns 'respond' (full message), 'react' (just tapback), or 'ignore'.
  */
 export async function getGroupChatAction(
   message: string,
   sender: string,
-  chatId: string
+  chatId: string,
+  persona: Persona = getPersona()
 ): Promise<{ action: GroupChatAction; reaction?: Reaction }> {
   const start = Date.now();
 
@@ -757,7 +780,7 @@ export async function getGroupChatAction(
     // Format with sender handles so Claude knows who said what
     const formatted = recentMessages.map(msg => {
       if (msg.role === 'assistant') {
-        return `Claude: ${msg.content}`;
+        return `${persona.name}: ${msg.content}`;
       } else {
         // Show who sent the message in group chats
         const sender = msg.handle || 'Someone';
@@ -774,37 +797,10 @@ export async function getGroupChatAction(
     const response = await client.messages.create({
       model: 'claude-haiku-4-5',
       max_tokens: 20,
-      system: `You classify how an AI assistant "Claude" should handle messages in a group chat.
-
-IMPORTANT: BIAS TOWARD "respond" - text responses are almost always better than reactions. Only use "react" for very brief acknowledgments where a text response would be awkward.
-
-Answer with ONE of these:
-- "respond" - Claude should send a text reply. USE THIS BY DEFAULT when:
-  * They asked Claude anything
-  * They ask for Claude's contact, contact card, vCard, or VCF (including resends)
-  * They mentioned Claude (or misspelled it - cluade, cloude, cladue, claud, etc.)
-  * They mentioned "AI", "bot", "assistant", or "Sullivan"
-  * They're talking to Claude or continuing a conversation
-  * It's a follow-up to Claude's message
-  * You're unsure - default to respond
-- "react:love" or "react:like" or "react:laugh" - ONLY for brief acknowledgments where text would be weird (like a simple "thanks!" or "lol"). Do NOT overuse reactions.
-- "ignore" - Human-to-human conversation not involving Claude at all
-
-ANTI-REACTION-LOOP: If you see reactions in recent context, prefer "respond" to break the pattern. People want conversation, not tapbacks.
-
-MISSPELLING TOLERANCE: People often typo "Claude" as cluade, cloude, cladue, claud, ckaude, etc. Treat these as mentions of Claude and respond!
-
-Examples:
-- "hey claude what's the weather" -> respond
-- "cluade what do u think" -> respond (misspelling!)
-- "cloude help me" -> respond (misspelling!)
-- "claude thoughts?" -> respond
-- "that's cool claude" -> respond (engage, don't just react!)
-- "thanks!" (very brief, nothing to add) -> react:love
-- "yo mike you coming tonight?" -> ignore`,
+      system: groupChatClassifierPrompt(persona),
       messages: [{
         role: 'user',
-        content: `${contextBlock}New message from ${sender}: "${message}"\n\nHow should Claude handle this?`
+        content: `${contextBlock}New message from ${sender}: "${message}"\n\nHow should ${persona.name} handle this?`
       }],
     });
 
