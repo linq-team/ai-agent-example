@@ -21,11 +21,13 @@ test('Claude wakes on its name, its typos and the generic words', () => {
   assert.doesNotMatch(prompt, /sullivan|linq/i);
 });
 
-test('Linq Sullivan wakes on linq and sullivan with no Claude typos; link is not a wake word and the classifier is told so', () => {
+test('Linq Sullivan wakes on linq and sullivan with no Claude typos; linq has its own rule, and link is not a wake word', () => {
   const words = wakeWords('Linq Sullivan');
   assert.deepEqual(words, ['linq', 'sullivan', 'ai', 'bot', 'assistant']);
   const prompt = groupChatClassifierPrompt({ name: 'Linq Sullivan', wakeWords: words });
-  assert.equal(wordsLine(prompt), '  * They used any of these words, in any capitalization: "linq", "sullivan", "ai", "bot", "assistant"');
+  assert.equal(wordsLine(prompt), '  * They used any of these words, in any capitalization: "sullivan", "ai", "bot", "assistant"');
+  assert.match(prompt, /Respond to "linq" when they're talking to Linq Sullivan \("linq what can you do\?"\), not when people mention Linq to each other/);
+  assert.match(prompt, /"mike did you sign up for the linq sandbox yet\?" -> ignore/);
   assert.doesNotMatch(prompt, /claude|cluade|MISSPELLING/i);
   assert.match(prompt, /"link" is an ordinary word, not "linq"/);
   assert.match(prompt, /"mike can you send me the link\?" -> ignore/);
@@ -39,8 +41,8 @@ test('name words need 3 or more letters; Claude typos only when the name contain
   assert.doesNotMatch(groupChatClassifierPrompt({ name: 'Ada', wakeWords: wakeWords('Ada') }), /claude|cluade|"link"/i);
 });
 
-test('AGENT_WAKE_WORDS adds words, trimmed and lowercased, and never adds link', () => {
-  const persona = loadPersona({ AGENT_NAME: 'Linq Sullivan', AGENT_WAKE_WORDS: ' Sully , hey LS,,link, Linq ' });
+test('AGENT_WAKE_WORDS adds words, trimmed, lowercased and stripped of surrounding punctuation, and never adds link', () => {
+  const persona = loadPersona({ AGENT_NAME: 'Linq Sullivan', AGENT_WAKE_WORDS: ' Sully! , "hey LS",,link., Linq ' });
   assert.deepEqual(persona.wakeWords, ['linq', 'sullivan', 'sully', 'hey ls', 'ai', 'bot', 'assistant']);
   assert.deepEqual(loadPersona({ AGENT_WAKE_WORDS: 'Sonnet' }).wakeWords, ['claude', 'sonnet', ...CLAUDE_TYPOS, 'ai', 'bot', 'assistant']);
   assert.ok(wordsLine(groupChatClassifierPrompt(persona)).includes('"sully", "hey ls"'));

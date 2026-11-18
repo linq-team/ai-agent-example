@@ -85,7 +85,8 @@ const NEVER_WAKE_WORDS = new Set(['link']);
 export function wakeWords(name: string, extra = ''): string[] {
   const letters = (word: string) => (word.match(/\p{L}/gu) || []).length;
   const nameWords = name.toLowerCase().split(/[^\p{L}\p{N}']+/u).filter(word => letters(word) >= 3);
-  const extraWords = extra.split(',').map(word => word.trim().toLowerCase()).filter(Boolean);
+  // Commas separate entries; punctuation around an entry ("ada!") is dropped.
+  const extraWords = extra.split(',').map(word => word.toLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, '')).filter(Boolean);
   const typos = /claude/i.test(name) ? CLAUDE_TYPOS : [];
   const words = [...nameWords, ...extraWords, ...typos, ...GENERIC_WAKE_WORDS];
   return [...new Set(words)].filter(word => !NEVER_WAKE_WORDS.has(word));

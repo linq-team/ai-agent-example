@@ -77,7 +77,7 @@ Environment variables in `.env`:
 | `AGENT_NAME` | The agent's name (default: `Claude`), used in the default persona and for group chat wake words |
 | `AGENT_PERSONA` | Persona text that replaces the built-in default (see [Bring your own persona](#bring-your-own-persona)) |
 | `AGENT_PERSONA_FILE` | Path to a file holding the persona text. Set this or `AGENT_PERSONA`, not both |
-| `AGENT_WAKE_WORDS` | Extra comma-separated words that make the agent answer in group chats |
+| `AGENT_WAKE_WORDS` | Extra words or phrases that make the agent answer in group chats, separated by commas (so write a phrase without one) |
 
 ### Bring your own persona
 
@@ -224,7 +224,7 @@ In group chats, Claude doesn't respond to every message. A fast Haiku call deter
 - Any word in `AGENT_WAKE_WORDS`
 - AI references: "hey AI", "ask the bot", "assistant"
 
-"link" is never a wake word, and when "linq" is one, the classifier is told that "send me the link" is not a mention. The classifier is a model, so this steers it rather than guaranteeing it.
+"link" is never a wake word. When "linq" is one, the classifier is told to answer "linq" only when people are talking to the agent, not when they mention Linq to each other, and that "send me the link" is not a mention. The classifier is a model, so this steers it rather than guaranteeing it.
 
 **Will react (but not respond):**
 - Positive feedback: "awesome", "haha", "thanks!"

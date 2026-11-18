@@ -133,7 +133,7 @@ In group chats:
 
   if (chatContext?.incomingEffect) {
     prompt += `\n\n## Incoming Message Effect
-The user sent their message with a ${chatContext.incomingEffect.type} effect: "${chatContext.incomingEffect.name}". You can acknowledge this if relevant (e.g., "nice ${chatContext.incomingEffect.name} effect!").`;
+The user sent their message with a ${chatContext.incomingEffect.type} effect: "${chatContext.incomingEffect.name}". You can acknowledge this if relevant (e.g., "Nice ${chatContext.incomingEffect.name} effect!").`;
   }
 
   if (chatContext?.service) {
@@ -252,7 +252,7 @@ const REMEMBER_USER_TOOL: Anthropic.Tool = {
 
 const GENERATE_IMAGE_TOOL: Anthropic.Tool = {
   name: 'generate_image',
-  description: 'Generate an image using DALL-E. Use when the user asks you to create, draw, generate, or make an image/picture/photo. Expand their request into a detailed prompt for better results. IMPORTANT: You MUST also write a brief text message (like "on it, making that corgi now" or "lemme draw that for u") - this message will be sent BEFORE the image starts generating so the user knows something is happening.',
+  description: 'Generate an image. Use when the user asks you to create, draw, generate, or make an image/picture/photo. Expand their request into a detailed prompt for better results. IMPORTANT: You MUST also write a brief text message (like "On it, drawing that corgi now.") - this message will be sent BEFORE the image starts generating so the user knows something is happening.',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -267,7 +267,7 @@ const GENERATE_IMAGE_TOOL: Anthropic.Tool = {
 
 const SET_GROUP_ICON_TOOL: Anthropic.Tool = {
   name: 'set_group_chat_icon',
-  description: 'Set the group chat icon/photo using a DALL-E generated image. ONLY use in group chats when someone explicitly asks to set/change the group icon/photo/picture. Expand their request into a detailed prompt. IMPORTANT: You MUST also write a brief text message acknowledging the request.',
+  description: 'Set the group chat icon/photo to a generated image. ONLY use in group chats when someone explicitly asks to set/change the group icon/photo/picture. Expand their request into a detailed prompt. IMPORTANT: You MUST also write a brief text message acknowledging the request.',
   input_schema: {
     type: 'object' as const,
     properties: {
@@ -705,6 +705,9 @@ export function groupChatClassifierPrompt(persona: Pick<Persona, 'name' | 'wakeW
   const { name, wakeWords } = persona;
   const isClaude = /claude/i.test(name);
   const word = wakeWords[0];
+  const hasLinq = wakeWords.includes('linq');
+  // "linq" is also a company people talk about, so it gets its own rule below rather than "any of these words".
+  const listed = wakeWords.filter(w => w !== 'linq');
 
   let prompt = `You classify how an AI assistant "${name}" should handle messages in a group chat.
 
@@ -714,7 +717,7 @@ Answer with ONE of these:
 - "respond" - ${name} should send a text reply. USE THIS BY DEFAULT when:
   * They asked ${name} anything
   * They ask for ${name}'s contact, contact card, vCard, or VCF (including resends)
-  * They used any of these words, in any capitalization: ${wakeWords.map(w => `"${w}"`).join(', ')}
+  * They used any of these words, in any capitalization: ${listed.map(w => `"${w}"`).join(', ')}
   * They're talking to ${name} or continuing a conversation
   * It's a follow-up to ${name}'s message
   * You're unsure - default to respond
@@ -728,10 +731,10 @@ ANTI-REACTION-LOOP: If you see reactions in recent context, prefer "respond" to 
 
 MISSPELLING TOLERANCE: People often typo "Claude" as cluade, cloude, cladue, claud, ckaude, etc. Treat these as mentions of Claude and respond!`;
   }
-  if (wakeWords.includes('linq')) {
+  if (hasLinq) {
     prompt += `
 
-"link" is an ordinary word, not "linq": "send me the link" is not a mention of ${name}.`;
+"Linq" is part of ${name}'s name, and also a company people talk about. Respond to "linq" when they're talking to ${name} ("linq what can you do?"), not when people mention Linq to each other. "link" is an ordinary word, not "linq": "send me the link" is not a mention of ${name}.`;
   }
 
   prompt += `
@@ -748,8 +751,9 @@ Examples:
 - "that's cool ${word}" -> respond (engage, don't just react!)
 - "thanks!" (very brief, nothing to add) -> react:love
 - "yo mike you coming tonight?" -> ignore`;
-  if (wakeWords.includes('linq')) {
+  if (hasLinq) {
     prompt += `
+- "mike did you sign up for the linq sandbox yet?" -> ignore
 - "mike can you send me the link?" -> ignore`;
   }
   return prompt;

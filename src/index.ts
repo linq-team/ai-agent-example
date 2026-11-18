@@ -238,7 +238,7 @@ app.post(
             console.log(`[timing] generateImage + sendImage: ${Date.now() - start}ms`);
           } else {
             // Image generation failed - let user know
-            await sendMessage(chatId, 'sorry the image didnt work, try again?');
+            await sendMessage(chatId, "Sorry, the image didn't work. Try again?");
             console.log(`[main] Image generation failed`);
           }
         }
@@ -261,7 +261,7 @@ app.post(
             console.log(`[timing] generateIcon + setIcon: ${Date.now() - start}ms`);
           } else {
             // Image generation failed - let user know
-            await sendMessage(chatId, 'sorry couldnt set the icon, try again?');
+            await sendMessage(chatId, "Sorry, I couldn't set the group icon. Try again?");
             console.log(`[main] Group icon generation failed`);
           }
         }
